@@ -1,9 +1,3 @@
-/-
-Port of `theories/lib/list.v`: additional facts about lists.
-
-Most of the stdpp facts proved there are already available in Lean core or
-Mathlib; we restate them under their RUXt names, with `stdpp`'s statements.
--/
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Zip
 import Mathlib.Data.List.Perm.Basic

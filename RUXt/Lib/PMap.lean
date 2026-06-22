@@ -1,21 +1,9 @@
-/-
-Partial maps as `Option`-valued functions.
-
-This is the Lean counterpart of the finite maps (`gmap`) from `stdpp` on which the
-Rocq development is built. Finiteness of the maps plays no role anywhere in the
-RUXt formalisation — allocation is specified relationally, and no fresh location
-is ever computed — so we use the simpler, extensional model of partial maps as
-plain functions `α → Option β`. Union is left-biased, exactly as for `gmap`.
-
-Besides the general theory, this file ports the auxiliary lemmas of
-`theories/lib/gmap.v`.
--/
 import Mathlib.Data.Set.Insert
 import Mathlib.Order.SetNotation
 
 namespace RUXt
 
-/-- Partial maps from `α` to `β`, the counterpart of `stdpp`'s `gmap α β`. -/
+/-- Partial maps from `α` to `β`. -/
 def PMap (α : Type*) (β : Type*) := α → Option β
 
 namespace PMap
@@ -24,28 +12,28 @@ variable {α : Type*} {β : Type*}
 
 instance : EmptyCollection (PMap α β) := ⟨fun _ => none⟩
 
-/-- Left-biased union, as for `gmap`. -/
+/-- Left-biased union. -/
 protected def union (m₁ m₂ : PMap α β) : PMap α β :=
   fun a => match m₁ a with | some b => some b | none => m₂ a
 
 instance : Union (PMap α β) := ⟨PMap.union⟩
 
-/-- `m.insert a b` maps `a` to `b` and is `m` elsewhere (stdpp's `<[a := b]> m`). -/
+/-- `m.insert a b` maps `a` to `b` and is `m` elsewhere. -/
 def insert [DecidableEq α] (a : α) (b : β) (m : PMap α β) : PMap α β :=
   fun a' => if a' = a then some b else m a'
 
-/-- The singleton map (stdpp's `{[a := b]}`). -/
+/-- The singleton map. -/
 def singleton [DecidableEq α] (a : α) (b : β) : PMap α β :=
   insert a b ∅
 
-/-- Remove a key (stdpp's `delete`). -/
+/-- Remove a key. -/
 def delete [DecidableEq α] (a : α) (m : PMap α β) : PMap α β :=
   fun a' => if a' = a then none else m a'
 
 /-- The domain of a partial map, as a set. -/
 def dom (m : PMap α β) : Set α := {a | ∃ b, m a = some b}
 
-/-- Two maps are disjoint when their domains are (stdpp's `##ₘ`). -/
+/-- Two maps are disjoint when their domains are. -/
 protected def Disjoint (m₁ m₂ : PMap α β) : Prop :=
   ∀ a, m₁ a = none ∨ m₂ a = none
 
@@ -98,17 +86,14 @@ theorem disjoint_comm {m₁ m₂ : PMap α β} : m₁ ##ₘ m₂ ↔ m₂ ##ₘ 
 @[simp] theorem disjoint_empty_r (m : PMap α β) : m ##ₘ (∅ : PMap α β) :=
   fun _ => Or.inr rfl
 
-/-- stdpp's `map_disjoint_Some_l`. -/
 theorem Disjoint.some_l {m₁ m₂ : PMap α β} {a : α} {b : β}
     (h : m₁ ##ₘ m₂) (ha : m₁ a = some b) : m₂ a = none := by
   rcases h a with h' | h' <;> grind
 
-/-- stdpp's `map_disjoint_Some_r`. -/
 theorem Disjoint.some_r {m₁ m₂ : PMap α β} {a : α} {b : β}
     (h : m₁ ##ₘ m₂) (ha : m₂ a = some b) : m₁ a = none :=
   h.symm.some_l ha
 
-/-- stdpp's `map_disjoint_insert_l`. -/
 @[simp] theorem disjoint_insert_l [DecidableEq α] {m₁ m₂ : PMap α β} {a : α} {b : β} :
     insert a b m₁ ##ₘ m₂ ↔ m₂ a = none ∧ m₁ ##ₘ m₂ := by
   constructor
@@ -117,22 +102,18 @@ theorem Disjoint.some_r {m₁ m₂ : PMap α β} {a : α} {b : β}
   · intro ⟨h₁, h₂⟩ a'
     have := h₂ a'; grind
 
-/-- stdpp's `map_disjoint_insert_r`. -/
 @[simp] theorem disjoint_insert_r [DecidableEq α] {m₁ m₂ : PMap α β} {a : α} {b : β} :
     m₁ ##ₘ insert a b m₂ ↔ m₁ a = none ∧ m₁ ##ₘ m₂ := by
   rw [disjoint_comm, disjoint_insert_l, disjoint_comm]
 
-/-- stdpp's `map_disjoint_singleton_l`. -/
 @[simp] theorem disjoint_singleton_l [DecidableEq α] {m : PMap α β} {a : α} {b : β} :
     singleton a b ##ₘ m ↔ m a = none := by
   simp [singleton]
 
-/-- stdpp's `map_disjoint_singleton_r`. -/
 @[simp] theorem disjoint_singleton_r [DecidableEq α] {m : PMap α β} {a : α} {b : β} :
     m ##ₘ singleton a b ↔ m a = none := by
   rw [disjoint_comm]; simp
 
-/-- stdpp's `map_disjoint_union_l`. -/
 @[simp] theorem disjoint_union_l {m₁ m₂ m₃ : PMap α β} :
     m₁ ∪ m₂ ##ₘ m₃ ↔ (m₁ ##ₘ m₃) ∧ (m₂ ##ₘ m₃) := by
   constructor
@@ -141,7 +122,6 @@ theorem Disjoint.some_r {m₁ m₂ : PMap α β} {a : α} {b : β}
   · intro ⟨h₁, h₂⟩ a
     have := h₁ a; have := h₂ a; grind
 
-/-- stdpp's `map_disjoint_union_r`. -/
 @[simp] theorem disjoint_union_r {m₁ m₂ m₃ : PMap α β} :
     m₁ ##ₘ m₂ ∪ m₃ ↔ (m₁ ##ₘ m₂) ∧ (m₁ ##ₘ m₃) := by
   rw [disjoint_comm, disjoint_union_l, disjoint_comm (m₂ := m₁), disjoint_comm (m₂ := m₁)]
@@ -157,28 +137,22 @@ theorem Disjoint.some_r {m₁ m₂ : PMap α β} {a : α} {b : β}
 theorem union_assoc (m₁ m₂ m₃ : PMap α β) : m₁ ∪ m₂ ∪ m₃ = m₁ ∪ (m₂ ∪ m₃) := by
   ext a; grind
 
-/-- stdpp's `map_union_comm`: union of disjoint maps is commutative. -/
 theorem union_comm {m₁ m₂ : PMap α β} (h : m₁ ##ₘ m₂) : m₁ ∪ m₂ = m₂ ∪ m₁ := by
   ext a; have := h a; grind
 
-/-- stdpp's `lookup_union_Some_raw`. -/
 theorem union_apply_eq_some {m₁ m₂ : PMap α β} {a : α} {b : β} :
     (m₁ ∪ m₂) a = some b ↔ m₁ a = some b ∨ (m₁ a = none ∧ m₂ a = some b) := by
   grind
 
-/-- stdpp's `lookup_union_Some_l`. -/
 theorem union_apply_some_l {m₁ m₂ : PMap α β} {a : α} {b : β} (h : m₁ a = some b) :
     (m₁ ∪ m₂) a = some b := by grind
 
-/-- stdpp's `lookup_union_r`. -/
 theorem union_apply_none_l {m₁ m₂ : PMap α β} {a : α} (h : m₁ a = none) :
     (m₁ ∪ m₂) a = m₂ a := by grind
 
-/-- stdpp's `lookup_union_Some_inv_l`. -/
 theorem union_apply_some_inv_l {m₁ m₂ : PMap α β} {a : α} {b : β}
     (h : (m₁ ∪ m₂) a = some b) (h₂ : m₂ a = none) : m₁ a = some b := by grind
 
-/-- stdpp's `lookup_union_Some_inv_r`. -/
 theorem union_apply_some_inv_r {m₁ m₂ : PMap α β} {a : α} {b : β}
     (h : (m₁ ∪ m₂) a = some b) (h₁ : m₁ a = none) : m₂ a = some b := by grind
 
@@ -187,12 +161,10 @@ theorem union_apply_some_inv_r {m₁ m₂ : PMap α β} {a : α} {b : β}
   simp only [dom, union_apply, Set.mem_union, Set.mem_setOf_eq]
   grind
 
-/-- stdpp's `insert_union_l`. -/
 theorem insert_union_l [DecidableEq α] (a : α) (b : β) (m₁ m₂ : PMap α β) :
     insert a b m₁ ∪ m₂ = insert a b (m₁ ∪ m₂) := by
   ext a'; grind
 
-/-- stdpp's `insert_union_singleton_l`. -/
 theorem insert_eq_singleton_union [DecidableEq α] (a : α) (b : β) (m : PMap α β) :
     insert a b m = singleton a b ∪ m := by
   ext a'; grind
@@ -205,27 +177,22 @@ theorem insert_eq_singleton_union [DecidableEq α] (a : α) (b : β) (m : PMap �
 theorem insert_apply_ne [DecidableEq α] {a a' : α} (b : β) (m : PMap α β) (h : a' ≠ a) :
     insert a b m a' = m a' := by grind
 
-/-- stdpp's `insert_insert`. -/
 @[simp] theorem insert_insert [DecidableEq α] (a : α) (b b' : β) (m : PMap α β) :
     insert a b (insert a b' m) = insert a b m := by
   ext a'; grind
 
-/-- stdpp's `insert_singleton`. -/
 @[simp] theorem insert_singleton [DecidableEq α] (a : α) (b b' : β) :
     insert a b (singleton a b') = singleton a b := by
   simp [singleton]
 
-/-- stdpp's `insert_commute`. -/
 theorem insert_comm [DecidableEq α] {a a' : α} (h : a ≠ a') (b b' : β) (m : PMap α β) :
     insert a b (insert a' b' m) = insert a' b' (insert a b m) := by
   ext a''; grind
 
-/-- stdpp's `insert_id`. -/
 theorem insert_id [DecidableEq α] {a : α} {b : β} {m : PMap α β} (h : m a = some b) :
     insert a b m = m := by
   ext a'; grind
 
-/-- stdpp's `insert_delete_insert`. -/
 @[simp] theorem insert_delete [DecidableEq α] (a : α) (b : β) (m : PMap α β) :
     insert a b (delete a m) = insert a b m := by
   ext a'; grind
@@ -263,45 +230,35 @@ theorem subset_refl (m : PMap α β) : m ⊆ m := fun _ _ h => h
 theorem subset_apply {m₁ m₂ : PMap α β} (h : m₁ ⊆ m₂) {a : α} {b : β}
     (ha : m₁ a = some b) : m₂ a = some b := h a b ha
 
-/-- stdpp's `insert_mono`. -/
 theorem insert_mono [DecidableEq α] {m₁ m₂ : PMap α β} (a : α) (b : β) (h : m₁ ⊆ m₂) :
     insert a b m₁ ⊆ insert a b m₂ := by
   intro a' b'; have := subset_def.mp h a' b'; grind
 
-/-! ### Ports of `theories/lib/gmap.v` -/
-
-/-- `map_disjoint_insert_singleton_l`. -/
 theorem disjoint_insert_singleton_l [DecidableEq α] {m : PMap α β} {a : α} (x y z : β) :
     insert a x (singleton a y) ##ₘ m ↔ singleton a z ##ₘ m := by
   simp
 
-/-- `map_disjoint_insert_singleton_r`. -/
 theorem disjoint_insert_singleton_r [DecidableEq α] {m : PMap α β} {a : α} (x y z : β) :
     m ##ₘ insert a x (singleton a y) ↔ m ##ₘ singleton a z := by
   simp
 
-/-- `map_disjoint_Some_insert`. -/
 theorem disjoint_some_insert [DecidableEq α] {m₁ m₂ : PMap α β} {a : α} {x : β} (y : β)
     (h : m₁ a = some x) (hdisj : m₁ ##ₘ m₂) : insert a y m₁ ##ₘ m₂ := by
   simp only [disjoint_insert_l]
   exact ⟨hdisj.some_l h, hdisj⟩
 
-/-- `map_union_dom`. -/
 theorem union_dom {m₁ m₂ : PMap α β} {a : α}
     (h : ∃ b, (m₁ ∪ m₂) a = some b) (hnone : m₁ a = none) : a ∈ dom m₂ := by
   grind
 
-/-- `map_disjoint_union_insert`. -/
 theorem disjoint_union_insert [DecidableEq α] {m₁ m₂ : PMap α β} {a : α} (x : β)
     (hdisj : m₁ ##ₘ m₂) (hnin : a ∉ dom (m₁ ∪ m₂)) : insert a x m₁ ##ₘ m₂ := by
   simp only [not_mem_dom, union_apply] at hnin
   simp only [disjoint_insert_l]
   grind
 
-/-- `map_union_id_l`. -/
 theorem union_id_l (m : PMap α β) : m = ∅ ∪ m := by simp
 
-/-- `map_union_id_r`. -/
 theorem union_id_r (m : PMap α β) : m = m ∪ ∅ := by simp
 
 end PMap

@@ -8,7 +8,7 @@ import RUXt.Model.Logic
 
 namespace RUXt
 
-open scoped RUXt.PMap
+open scoped PMap
 
 /-! ### Function specifications -/
 

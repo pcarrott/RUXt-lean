@@ -1,290 +1,257 @@
-/-
-Port of `theories/lang/semantics.v`: operational semantics, frame preservation.
--/
-import RUXt.Lang.Lang
+import RUXt.Lang.Library
 
 namespace RUXt
 
-open scoped RUXt.PMap
+open scoped PMap
 
-/-! ### Program context -/
-
-/-- Function implementations (`fun_impl`, Rocq notation `{(xs) e}`). -/
-structure FunImpl where
-  params : List String
-  body : Expr
-
-/-- Implementation contexts. -/
-abbrev ImplCtx := PMap String FunImpl
-
-/-! ### Heaps -/
+/-! ### Program states: heaps -/
 
 /-- Heap values: a value or the uninitialised `poison`. -/
 inductive HeapValue
   | val (v : Val)
   | poison
 deriving DecidableEq
-
 /-- Block heaps: partial maps from offsets to heap values. -/
 abbrev BlockHeap := PMap ℕ HeapValue
-
 /-- Block values: a live block of a given size, or a freed block. -/
 inductive BlockValue
   | block (sz : ℕ) (bh : BlockHeap)
   | freed
-
 /-- Heaps: partial maps from blocks to block values. -/
 abbrev Heap := PMap Block BlockValue
+instance : Union Heap := ⟨PMap.union⟩
 
-/-! ### Heap operations -/
-
-/-- `breplicate`. -/
+/-- Create a block heap with `n` cells, all initialised to `hv`. -/
 def breplicate (hv : HeapValue) : ℕ → BlockHeap
   | 0 => ∅
   | n + 1 => (breplicate hv n).insert n hv
-
-/-- `balloc`: a freshly allocated block heap of `n` poison cells. -/
+/-- A freshly allocated block heap of `n` uninitialised cells. -/
 abbrev balloc : ℕ → BlockHeap := breplicate .poison
 
-/-- `bupdate`. -/
+/-- Update a block heap at index `i` with value `v`. -/
 def bupdate (bh : BlockHeap) (i : ℕ) (v : Val) : BlockHeap :=
   bh.insert i (.val v)
-
-/-- `hupdate`. -/
-def hupdate (h : Heap) (b : Block) (bv : BlockValue) : Heap :=
-  PMap.insert b bv h
-
-/-- `hstore`. -/
+/-- Update a heap at block `b` with value `bv`. -/
+def Heap.update : Heap → Block → BlockValue → Heap
+  | h, b, bv => PMap.insert b bv h
+/-- Store ⟨`sz`, `bh`⟩ in the heap at block `b`. -/
 abbrev hstore (h : Heap) (b : Block) (sz : ℕ) (bh : BlockHeap) : Heap :=
-  hupdate h b (.block sz bh)
-
-/-- `hfree`. -/
+  h.update b (.block sz bh)
+/-- Free block `b` from the heap. -/
 abbrev hfree (h : Heap) (b : Block) : Heap :=
-  hupdate h b .freed
+  h.update b .freed
 
 @[simp, grind =] theorem hupdate_apply (h : Heap) (b : Block) (bv : BlockValue) (b' : Block) :
-    hupdate h b bv b' = if b' = b then some bv else h b' := rfl
+    h.update b bv b' = if b' = b then some bv else h b' := rfl
 
-/-- `hupdate_disj`. -/
 theorem hupdate_disj {h h' : Heap} {b : Block} {bv : BlockValue} :
-    hupdate h b bv ##ₘ h' ↔ h ##ₘ h' ∧ b ∉ h'.dom := by
-  unfold hupdate
+    h.update b bv ##ₘ h' ↔ h ##ₘ h' ∧ b ∉ h'.dom := by
+  unfold Heap.update
   rw [PMap.disjoint_insert_l]
   simp only [PMap.not_mem_dom]
   exact and_comm
 
-/-- `hupdate_union`. -/
 theorem hupdate_union {h h' : Heap} {b : Block} {bv : BlockValue}
-    (_ : hupdate h b bv ##ₘ h') :
-    hupdate h b bv ∪ h' = hupdate (h ∪ h') b bv :=
+    (_ : h.update b bv ##ₘ h') :
+    (h.update b bv) ∪ h' = (h ∪ h').update b bv :=
   PMap.insert_union_l ..
 
-/-! ### Termination -/
+/-! ### Operational semantics
 
-/-- Termination tags (`exit`). -/
+`BigStep` is the full semantics (`Λ ⊢ ⟨h | e⟩ ⇓ ⟨h' | ε⟩`).
+
+`FrameStep` the instrumented semantics (`Λ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩`),
+which reports misses on locations outside the current heap fragment. -/
+
+/-- Termination tags. -/
 inductive Exit
   | ok (v : Val)
   | err
   | miss (l : Loc)
 deriving DecidableEq
 
-instance : Countable Exit := by
-  have : Function.Injective (fun ε : Exit => match ε with
-      | .ok v => Sum.inl (some v)
-      | .err => Sum.inl none
-      | .miss l => Sum.inr l : Exit → Option Val ⊕ Loc) := by
-    intro ε₁ ε₂ h; cases ε₁ <;> cases ε₂ <;> simp_all
-  exact this.countable
-
-/-! ### Operational semantics
-
-`BigStep` is the full semantics (`eval_expr`, `γ ⊢ ⟨h | e⟩ ⇓ ⟨h' | ε⟩`),
-`FrameStep` the instrumented semantics (`eval_expr_frame`,
-`γ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩`), which reports misses on locations outside the
-current heap fragment. -/
-
-/-- The full big-step semantics (`eval_expr`). -/
-inductive BigStep (γ : ImplCtx) : Heap → Expr → Heap → Exit → Prop
+/-- The full big-step semantics. -/
+inductive BigStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
   | pure {p : Pure} {h : Heap} {v : Val} :
       p.eval = some v →
-      BigStep γ h (.pure p) h (.ok v)
+      BigStep Λ h (.pure p) h (.ok v)
   | assume {h : Heap} :
-      BigStep γ h (.assume .true) h (.ok .unit)
+      BigStep Λ h (.assume .true) h (.ok .unit)
   | error {h : Heap} :
-      BigStep γ h .error h .err
+      BigStep Λ h .error h .err
   | letIn {x : Binder} {e₁ e₂ : Expr} {h h' h'' : Heap} {v : Val} {ε : Exit} :
-      BigStep γ h e₁ h'' (.ok v) → BigStep γ h'' (e₂.subst x v) h' ε →
-      BigStep γ h (.letIn x e₁ e₂) h' ε
+      BigStep Λ h e₁ h'' (.ok v) → BigStep Λ h'' (e₂.subst x v) h' ε →
+      BigStep Λ h (.letIn x e₁ e₂) h' ε
   | letCut {x : Binder} {e₁ e₂ : Expr} {h h' : Heap} {ε : Exit} :
-      BigStep γ h e₁ h' ε → (¬ ∃ v, ε = .ok v) →
-      BigStep γ h (.letIn x e₁ e₂) h' ε
+      BigStep Λ h e₁ h' ε → (¬ ∃ v, ε = .ok v) →
+      BigStep Λ h (.letIn x e₁ e₂) h' ε
   | choice {eᵢ e₁ e₂ : Expr} {h h' : Heap} {ε : Exit} :
-      BigStep γ h eᵢ h' ε → (eᵢ = e₁ ∨ eᵢ = e₂) →
-      BigStep γ h (.choice e₁ e₂) h' ε
+      BigStep Λ h eᵢ h' ε → (eᵢ = e₁ ∨ eᵢ = e₂) →
+      BigStep Λ h (.choice e₁ e₂) h' ε
   | alloc {t : Term} {h h' : Heap} {l : Loc} {n : ℕ} :
       t.eval = some (.int n) →
       l.1 ∉ h.dom → l.2 = 0 →
       h' = hstore h l.1 n (balloc n) →
-      BigStep γ h (.alloc t) h' (.ok (.loc l))
+      BigStep Λ h (.alloc t) h' (.ok (.loc l))
   | free {t : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → l.2 = 0 → (∀ i < sz, i ∈ bh.dom) →
       h' = hfree h l.1 →
-      BigStep γ h (.free t) h' (.ok .unit)
+      BigStep Λ h (.free t) h' (.ok .unit)
   | freeErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       h l.1 = some .freed →
-      BigStep γ h (.free t) h .err
+      BigStep Λ h (.free t) h .err
   | freeErrBlock {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       l.2 ≠ 0 →
-      BigStep γ h (.free t) h .err
+      BigStep Λ h (.free t) h .err
   | freeMiss {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       l.1 ∉ h.dom →
-      BigStep γ h (.free t) h .err
+      BigStep Λ h (.free t) h .err
   | freeMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {i : ℕ} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → i < sz → i ∉ bh.dom →
-      BigStep γ h (.free t) h .err
+      BigStep Λ h (.free t) h .err
   | store {t₁ t₂ : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t₁.eval = some (.loc l) → t₂.eval = some v →
       h l.1 = some (.block sz bh) → l.2 ∈ bh.dom →
       h' = hstore h l.1 sz (bupdate bh l.2 v) →
-      BigStep γ h (.store t₁ t₂) h' (.ok .unit)
+      BigStep Λ h (.store t₁ t₂) h' (.ok .unit)
   | storeErr {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
       h l.1 = some .freed →
-      BigStep γ h (.store t₁ t₂) h .err
+      BigStep Λ h (.store t₁ t₂) h .err
   | storeMiss {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
       l.1 ∉ h.dom →
-      BigStep γ h (.store t₁ t₂) h .err
+      BigStep Λ h (.store t₁ t₂) h .err
   | storeMissBlock {t₁ t₂ : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t₁.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
-      BigStep γ h (.store t₁ t₂) h .err
+      BigStep Λ h (.store t₁ t₂) h .err
   | load {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → bh l.2 = some (.val v) →
-      BigStep γ h (.load t) h (.ok v)
+      BigStep Λ h (.load t) h (.ok v)
   | loadErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       h l.1 = some .freed →
-      BigStep γ h (.load t) h .err
+      BigStep Λ h (.load t) h .err
   | loadErrBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → bh l.2 = some .poison →
-      BigStep γ h (.load t) h .err
+      BigStep Λ h (.load t) h .err
   | loadMiss {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       l.1 ∉ h.dom →
-      BigStep γ h (.load t) h .err
+      BigStep Λ h (.load t) h .err
   | loadMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
-      BigStep γ h (.load t) h .err
-  | call {f : String} {xs : List String} {e : Expr} {ts : List Term} {h h' : Heap} {ε : Exit} :
-      γ f = some ⟨xs, e⟩ → BigStep γ h (e.substs xs ts) h' ε →
-      BigStep γ h (.call f ts) h' ε
+      BigStep Λ h (.load t) h .err
+  | call {f : Fid} {xs e τ P} {ts : List Term} {h h' : Heap} {ε : Exit} :
+      Λ.get f = some ⟨xs, e, τ, P⟩ → BigStep Λ h (e.substs (xs.map Prod.fst) ts) h' ε →
+      BigStep Λ h (.call f ts) h' ε
 
-@[inherit_doc] scoped notation:50 γ:51 " ⊢ " "⟨" h " | " e "⟩" " ⇓ " "⟨" h' " | " ε "⟩" =>
-  BigStep γ h e h' ε
+@[inherit_doc] scoped notation:50 Λ:51 " ⊢ " "⟨" h " | " e "⟩" " ⇓ " "⟨" h' " | " ε "⟩" =>
+  BigStep Λ h e h' ε
 
-/-- The instrumented big-step semantics (`eval_expr_frame`). -/
-inductive FrameStep (γ : ImplCtx) : Heap → Expr → Heap → Exit → Prop
+/-- The instrumented big-step semantics. -/
+inductive FrameStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
   | pure {p : Pure} {h : Heap} {v : Val} :
       p.eval = some v →
-      FrameStep γ h (.pure p) h (.ok v)
+      FrameStep Λ h (.pure p) h (.ok v)
   | assume {h : Heap} :
-      FrameStep γ h (.assume .true) h (.ok .unit)
+      FrameStep Λ h (.assume .true) h (.ok .unit)
   | error {h : Heap} :
-      FrameStep γ h .error h .err
+      FrameStep Λ h .error h .err
   | letIn {x : Binder} {e₁ e₂ : Expr} {h h' h'' : Heap} {v : Val} {ε : Exit} :
-      FrameStep γ h e₁ h'' (.ok v) → FrameStep γ h'' (e₂.subst x v) h' ε →
-      FrameStep γ h (.letIn x e₁ e₂) h' ε
+      FrameStep Λ h e₁ h'' (.ok v) → FrameStep Λ h'' (e₂.subst x v) h' ε →
+      FrameStep Λ h (.letIn x e₁ e₂) h' ε
   | letCut {x : Binder} {e₁ e₂ : Expr} {h h' : Heap} {ε : Exit} :
-      FrameStep γ h e₁ h' ε → (¬ ∃ v, ε = .ok v) →
-      FrameStep γ h (.letIn x e₁ e₂) h' ε
+      FrameStep Λ h e₁ h' ε → (¬ ∃ v, ε = .ok v) →
+      FrameStep Λ h (.letIn x e₁ e₂) h' ε
   | choice {eᵢ e₁ e₂ : Expr} {h h' : Heap} {ε : Exit} :
-      FrameStep γ h eᵢ h' ε → (eᵢ = e₁ ∨ eᵢ = e₂) →
-      FrameStep γ h (.choice e₁ e₂) h' ε
+      FrameStep Λ h eᵢ h' ε → (eᵢ = e₁ ∨ eᵢ = e₂) →
+      FrameStep Λ h (.choice e₁ e₂) h' ε
   | alloc {t : Term} {h h' : Heap} {l : Loc} {n : ℕ} :
       t.eval = some (.int n) →
       l.1 ∉ h.dom → l.2 = 0 →
       h' = hstore h l.1 n (balloc n) →
-      FrameStep γ h (.alloc t) h' (.ok (.loc l))
+      FrameStep Λ h (.alloc t) h' (.ok (.loc l))
   | free {t : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → l.2 = 0 → (∀ i < sz, i ∈ bh.dom) →
       h' = hfree h l.1 →
-      FrameStep γ h (.free t) h' (.ok .unit)
+      FrameStep Λ h (.free t) h' (.ok .unit)
   | freeErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       h l.1 = some .freed →
-      FrameStep γ h (.free t) h .err
+      FrameStep Λ h (.free t) h .err
   | freeErrBlock {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       l.2 ≠ 0 →
-      FrameStep γ h (.free t) h .err
+      FrameStep Λ h (.free t) h .err
   | freeMiss {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       l.1 ∉ h.dom →
-      FrameStep γ h (.free t) h (.miss l)
+      FrameStep Λ h (.free t) h (.miss l)
   | freeMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {i : ℕ} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → i < sz → i ∉ bh.dom →
-      FrameStep γ h (.free t) h (.miss (l +ₗ i))
+      FrameStep Λ h (.free t) h (.miss (l +ₗ i))
   | store {t₁ t₂ : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t₁.eval = some (.loc l) → t₂.eval = some v →
       h l.1 = some (.block sz bh) → l.2 ∈ bh.dom →
       h' = hstore h l.1 sz (bupdate bh l.2 v) →
-      FrameStep γ h (.store t₁ t₂) h' (.ok .unit)
+      FrameStep Λ h (.store t₁ t₂) h' (.ok .unit)
   | storeErr {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
       h l.1 = some .freed →
-      FrameStep γ h (.store t₁ t₂) h .err
+      FrameStep Λ h (.store t₁ t₂) h .err
   | storeMiss {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
       l.1 ∉ h.dom →
-      FrameStep γ h (.store t₁ t₂) h (.miss l)
+      FrameStep Λ h (.store t₁ t₂) h (.miss l)
   | storeMissBlock {t₁ t₂ : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t₁.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
-      FrameStep γ h (.store t₁ t₂) h (.miss l)
+      FrameStep Λ h (.store t₁ t₂) h (.miss l)
   | load {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → bh l.2 = some (.val v) →
-      FrameStep γ h (.load t) h (.ok v)
+      FrameStep Λ h (.load t) h (.ok v)
   | loadErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       h l.1 = some .freed →
-      FrameStep γ h (.load t) h .err
+      FrameStep Λ h (.load t) h .err
   | loadErrBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → bh l.2 = some .poison →
-      FrameStep γ h (.load t) h .err
+      FrameStep Λ h (.load t) h .err
   | loadMiss {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
       l.1 ∉ h.dom →
-      FrameStep γ h (.load t) h (.miss l)
+      FrameStep Λ h (.load t) h (.miss l)
   | loadMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
       h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
-      FrameStep γ h (.load t) h (.miss l)
-  | call {f : String} {xs : List String} {e : Expr} {ts : List Term} {h h' : Heap} {ε : Exit} :
-      γ f = some ⟨xs, e⟩ → FrameStep γ h (e.substs xs ts) h' ε →
-      FrameStep γ h (.call f ts) h' ε
+      FrameStep Λ h (.load t) h (.miss l)
+  | call {f : Fid} {xs e τ P} {ts : List Term} {h h' : Heap} {ε : Exit} :
+      Λ.get f = some ⟨xs, e, τ, P⟩ → FrameStep Λ h (e.substs (xs.map Prod.fst) ts) h' ε →
+      FrameStep Λ h (.call f ts) h' ε
 
-@[inherit_doc] scoped notation:50 γ:51 " ⊢ " "⟨" h " | " e "⟩" " ⇓ᵢ " "⟨" h' " | " ε "⟩" =>
-  FrameStep γ h e h' ε
+@[inherit_doc] scoped notation:50 Λ:51 " ⊢ " "⟨" h " | " e "⟩" " ⇓ᵢ " "⟨" h' " | " ε "⟩" =>
+  FrameStep Λ h e h' ε
 
 /-! ### Frame properties -/
 
-/-- Under-approximate frame validity — `frame_addition`. -/
-theorem frame_addition {γ : ImplCtx} {h e h' ε} (hstep : γ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩) :
+/-- Frame addition: under-approximate frame validity. -/
+theorem frame_addition {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩) :
     ∀ hF, h' ##ₘ hF →
-    ((γ ⊢ ⟨h ∪ hF | e⟩ ⇓ᵢ ⟨h' ∪ hF | ε⟩) ∧ h ##ₘ hF) ∨
+    ((Λ ⊢ ⟨h ∪ hF | e⟩ ⇓ᵢ ⟨h' ∪ hF | ε⟩) ∧ h ##ₘ hF) ∨
     (∃ l, ε = .miss l ∧ l.1 ∈ hF.dom) := by
   induction hstep with
   | pure hp => exact fun hF hd => .inl ⟨.pure hp, hd⟩
@@ -380,12 +347,12 @@ theorem frame_addition {γ : ImplCtx} {h e h' ε} (hstep : γ ⊢ ⟨h | e⟩ �
     · exact .inl ⟨.call hf hstepF, hdisj⟩
     · exact .inr hmiss
 
-/-- Over-approximate frame validity — `frame_subtraction`. -/
-theorem frame_subtraction {γ : ImplCtx} {h e h' ε} (hstep : γ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩) :
+/-- Frame subtraction: over-approximate frame validity. -/
+theorem frame_subtraction {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩) :
     ∀ hs hF, h = hs ∪ hF → hs ##ₘ hF →
     ∃ hs', hs' ##ₘ hF ∧
-      (((γ ⊢ ⟨hs | e⟩ ⇓ᵢ ⟨hs' | ε⟩) ∧ h' = hs' ∪ hF) ∨
-       (∃ l, (γ ⊢ ⟨hs | e⟩ ⇓ᵢ ⟨hs' | .miss l⟩) ∧ l.1 ∈ hF.dom)) := by
+      (((Λ ⊢ ⟨hs | e⟩ ⇓ᵢ ⟨hs' | ε⟩) ∧ h' = hs' ∪ hF) ∨
+       (∃ l, (Λ ⊢ ⟨hs | e⟩ ⇓ᵢ ⟨hs' | .miss l⟩) ∧ l.1 ∈ hF.dom)) := by
   induction hstep with
   | pure hp => exact fun hs hF hheap hdisj => ⟨hs, hdisj, .inl ⟨.pure hp, hheap⟩⟩
   | assume => exact fun hs hF hheap hdisj => ⟨hs, hdisj, .inl ⟨.assume, hheap⟩⟩
@@ -414,7 +381,7 @@ theorem frame_subtraction {γ : ImplCtx} {h e h' ε} (hstep : γ ⊢ ⟨h | e⟩
   | alloc ht hnin hofs heq =>
     intro hs hF hheap hdisj
     subst heq hheap
-    simp only [PMap.dom_union, Set.mem_union, not_or] at hnin
+    rw [PMap.dom_union, Set.mem_union, not_or] at hnin
     refine ⟨hstore hs _ _ (balloc _), hupdate_disj.mpr ⟨hdisj, hnin.2⟩,
       .inl ⟨.alloc ht hnin.1 hofs rfl, ?_⟩⟩
     rw [hupdate_union (hupdate_disj.mpr ⟨hdisj, hnin.2⟩)]
@@ -509,7 +476,7 @@ theorem frame_subtraction {γ : ImplCtx} {h e h' ε} (hstep : γ ⊢ ⟨h | e⟩
 
 /-! ### Relating the instrumented and the full semantics -/
 
-/-- `exit_in_full`. -/
+/-- Maps a `miss` tag to `err`. -/
 def Exit.toFull : Exit → Exit
   | .miss _ => .err
   | ε => ε
@@ -518,9 +485,9 @@ def Exit.toFull : Exit → Exit
 @[simp] theorem Exit.toFull_err : Exit.err.toFull = .err := rfl
 @[simp] theorem Exit.toFull_miss (l : Loc) : (Exit.miss l).toFull = .err := rfl
 
-/-- `semantics_preservation`. -/
-theorem semantics_preservation {γ : ImplCtx} {h e h' ε}
-    (hstep : γ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩) : γ ⊢ ⟨h | e⟩ ⇓ ⟨h' | ε.toFull⟩ := by
+/-- Preserved behaviour between the instrumented and the full semantics. -/
+theorem semantics_preservation {Λ : Library} {h e h' ε}
+    (hstep : Λ ⊢ ⟨h | e⟩ ⇓ᵢ ⟨h' | ε⟩) : Λ ⊢ ⟨h | e⟩ ⇓ ⟨h' | ε.toFull⟩ := by
   induction hstep with
   | pure hp => exact .pure hp
   | assume => exact .assume
