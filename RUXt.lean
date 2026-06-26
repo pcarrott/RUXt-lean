@@ -3,8 +3,7 @@ RUXtBelt: the semantic model of RUXt — Lean port.
 
 This is the root module; it imports the whole development.
 -/
-import RUXt.Lib.PMap
-import RUXt.Lib.List
+import RUXt.Lib.PFun
 import RUXt.Lib.Telescopes
 import RUXt.Lang.Types
 import RUXt.Lang.Lang
@@ -15,6 +14,7 @@ import RUXt.Model.Assertion
 import RUXt.Model.Logic
 -- import RUXt.Model.RISL
 import RUXt.Model.Summary
+import RUXt.Model.Witness
 import RUXt.Model.Refute
 -- import RUXt.Types.Ty
 -- import RUXt.Types.Lib.Int

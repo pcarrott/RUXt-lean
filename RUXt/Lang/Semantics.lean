@@ -2,7 +2,7 @@ import RUXt.Lang.Library
 
 namespace RUXt
 
-open scoped PMap
+open scoped PFun
 
 /-! ### Program states: heaps -/
 
@@ -12,49 +12,52 @@ inductive HeapValue
   | poison
 deriving DecidableEq
 /-- Block heaps: partial maps from offsets to heap values. -/
-abbrev BlockHeap := PMap ℕ HeapValue
+abbrev BlockHeap := PFun ℕ HeapValue
 /-- Block values: a live block of a given size, or a freed block. -/
 inductive BlockValue
   | block (sz : ℕ) (bh : BlockHeap)
   | freed
 /-- Heaps: partial maps from blocks to block values. -/
-abbrev Heap := PMap Block BlockValue
-instance : Union Heap := ⟨PMap.union⟩
+abbrev Heap := PFun Block BlockValue
+noncomputable instance : Union Heap := ⟨PFun.union⟩
 
+/-- Block `bh` stores value `hv` at index `i`. -/
+def BlockHeap.MapsTo (bh : BlockHeap) (i : ℕ) (hv : HeapValue) : Prop :=
+  bh i = hv
 /-- Create a block heap with `n` cells, all initialised to `hv`. -/
-def breplicate (hv : HeapValue) : ℕ → BlockHeap
+def BlockHeap.replicate (hv : HeapValue) : ℕ → BlockHeap
   | 0 => ∅
-  | n + 1 => (breplicate hv n).insert n hv
+  | n + 1 => (replicate hv n).insert n hv
 /-- A freshly allocated block heap of `n` uninitialised cells. -/
-abbrev balloc : ℕ → BlockHeap := breplicate .poison
-
+def BlockHeap.alloc : ℕ → BlockHeap := BlockHeap.replicate .poison
 /-- Update a block heap at index `i` with value `v`. -/
-def bupdate (bh : BlockHeap) (i : ℕ) (v : Val) : BlockHeap :=
+def BlockHeap.update (bh : BlockHeap) (i : ℕ) (v : Val) : BlockHeap :=
   bh.insert i (.val v)
+
+/-- Heap `h` stores block `bv` at index `b`. -/
+def Heap.MapsTo (h : Heap) (b : Block) (bv : BlockValue) : Prop :=
+  h b = bv
 /-- Update a heap at block `b` with value `bv`. -/
 def Heap.update : Heap → Block → BlockValue → Heap
-  | h, b, bv => PMap.insert b bv h
+  | h, b, bv => PFun.insert b bv h
 /-- Store ⟨`sz`, `bh`⟩ in the heap at block `b`. -/
-abbrev hstore (h : Heap) (b : Block) (sz : ℕ) (bh : BlockHeap) : Heap :=
+abbrev Heap.store (h : Heap) (b : Block) (sz : ℕ) (bh : BlockHeap) : Heap :=
   h.update b (.block sz bh)
 /-- Free block `b` from the heap. -/
-abbrev hfree (h : Heap) (b : Block) : Heap :=
+abbrev Heap.free (h : Heap) (b : Block) : Heap :=
   h.update b .freed
 
-@[simp, grind =] theorem hupdate_apply (h : Heap) (b : Block) (bv : BlockValue) (b' : Block) :
-    h.update b bv b' = if b' = b then some bv else h b' := rfl
-
-theorem hupdate_disj {h h' : Heap} {b : Block} {bv : BlockValue} :
+theorem Heap.update_disj {h h' : Heap} {b : Block} {bv : BlockValue} :
     h.update b bv ##ₘ h' ↔ h ##ₘ h' ∧ b ∉ h'.dom := by
   unfold Heap.update
-  rw [PMap.disjoint_insert_l]
-  simp only [PMap.not_mem_dom]
+  rw [PFun.disjoint_insert_l]
+  simp only [PFun.not_mem_dom]
   exact and_comm
 
-theorem hupdate_union {h h' : Heap} {b : Block} {bv : BlockValue}
+theorem Heap.update_union {h h' : Heap} {b : Block} {bv : BlockValue}
     (_ : h.update b bv ##ₘ h') :
     (h.update b bv) ∪ h' = (h ∪ h').update b bv :=
-  PMap.insert_union_l ..
+  PFun.insert_union_l ..
 
 /-! ### Operational semantics
 
@@ -91,16 +94,16 @@ inductive BigStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
   | alloc {t : Term} {h h' : Heap} {l : Loc} {n : ℕ} :
       t.eval = some (.int n) →
       l.1 ∉ h.dom → l.2 = 0 →
-      h' = hstore h l.1 n (balloc n) →
+      h' = h.store l.1 n (BlockHeap.alloc n) →
       BigStep Λ h (.alloc t) h' (.ok (.loc l))
   | free {t : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → l.2 = 0 → (∀ i < sz, i ∈ bh.dom) →
-      h' = hfree h l.1 →
+      h.MapsTo l.1 (.block sz bh) → l.2 = 0 → (∀ i < sz, i ∈ bh.dom) →
+      h' = h.free l.1 →
       BigStep Λ h (.free t) h' (.ok .unit)
   | freeErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
-      h l.1 = some .freed →
+      h.MapsTo l.1 .freed →
       BigStep Λ h (.free t) h .err
   | freeErrBlock {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
@@ -112,16 +115,16 @@ inductive BigStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
       BigStep Λ h (.free t) h .err
   | freeMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {i : ℕ} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → i < sz → i ∉ bh.dom →
+      h.MapsTo l.1 (.block sz bh) → i < sz → i ∉ bh.dom →
       BigStep Λ h (.free t) h .err
   | store {t₁ t₂ : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t₁.eval = some (.loc l) → t₂.eval = some v →
-      h l.1 = some (.block sz bh) → l.2 ∈ bh.dom →
-      h' = hstore h l.1 sz (bupdate bh l.2 v) →
+      h.MapsTo l.1 (.block sz bh) → l.2 ∈ bh.dom →
+      h' = h.store l.1 sz (bh.update l.2 v) →
       BigStep Λ h (.store t₁ t₂) h' (.ok .unit)
   | storeErr {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
-      h l.1 = some .freed →
+      h.MapsTo l.1 .freed →
       BigStep Λ h (.store t₁ t₂) h .err
   | storeMiss {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
@@ -129,19 +132,19 @@ inductive BigStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
       BigStep Λ h (.store t₁ t₂) h .err
   | storeMissBlock {t₁ t₂ : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t₁.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
+      h.MapsTo l.1 (.block sz bh) → l.2 ∉ bh.dom →
       BigStep Λ h (.store t₁ t₂) h .err
   | load {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → bh l.2 = some (.val v) →
+      h.MapsTo l.1 (.block sz bh) → bh.MapsTo l.2 (.val v) →
       BigStep Λ h (.load t) h (.ok v)
   | loadErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
-      h l.1 = some .freed →
+      h.MapsTo l.1 .freed →
       BigStep Λ h (.load t) h .err
   | loadErrBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → bh l.2 = some .poison →
+      h.MapsTo l.1 (.block sz bh) → bh.MapsTo l.2 .poison →
       BigStep Λ h (.load t) h .err
   | loadMiss {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
@@ -149,10 +152,10 @@ inductive BigStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
       BigStep Λ h (.load t) h .err
   | loadMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
+      h.MapsTo l.1 (.block sz bh) → l.2 ∉ bh.dom →
       BigStep Λ h (.load t) h .err
   | call {f : Fid} {xs e τ P} {ts : List Term} {h h' : Heap} {ε : Exit} :
-      Λ.get f = some ⟨xs, e, τ, P⟩ → BigStep Λ h (e.substs (xs.map Prod.fst) ts) h' ε →
+      Λ.MapsTo f ⟨xs, e, τ, P⟩ → BigStep Λ h (e.substs (xs.map Prod.fst) ts) h' ε →
       BigStep Λ h (.call f ts) h' ε
 
 @[inherit_doc] scoped notation:50 Λ:51 " ⊢ " "⟨" h " | " e "⟩" " ⇓ " "⟨" h' " | " ε "⟩" =>
@@ -179,16 +182,16 @@ inductive FrameStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
   | alloc {t : Term} {h h' : Heap} {l : Loc} {n : ℕ} :
       t.eval = some (.int n) →
       l.1 ∉ h.dom → l.2 = 0 →
-      h' = hstore h l.1 n (balloc n) →
+      h' = h.store l.1 n (BlockHeap.alloc n) →
       FrameStep Λ h (.alloc t) h' (.ok (.loc l))
   | free {t : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → l.2 = 0 → (∀ i < sz, i ∈ bh.dom) →
-      h' = hfree h l.1 →
+      h.MapsTo l.1 (.block sz bh) → l.2 = 0 → (∀ i < sz, i ∈ bh.dom) →
+      h' = h.free l.1 →
       FrameStep Λ h (.free t) h' (.ok .unit)
   | freeErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
-      h l.1 = some .freed →
+      h.MapsTo l.1 .freed →
       FrameStep Λ h (.free t) h .err
   | freeErrBlock {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
@@ -200,16 +203,16 @@ inductive FrameStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
       FrameStep Λ h (.free t) h (.miss l)
   | freeMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {i : ℕ} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → i < sz → i ∉ bh.dom →
+      h.MapsTo l.1 (.block sz bh) → i < sz → i ∉ bh.dom →
       FrameStep Λ h (.free t) h (.miss (l +ₗ i))
   | store {t₁ t₂ : Term} {h h' : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t₁.eval = some (.loc l) → t₂.eval = some v →
-      h l.1 = some (.block sz bh) → l.2 ∈ bh.dom →
-      h' = hstore h l.1 sz (bupdate bh l.2 v) →
+      h.MapsTo l.1 (.block sz bh) → l.2 ∈ bh.dom →
+      h' = h.store l.1 sz (bh.update l.2 v) →
       FrameStep Λ h (.store t₁ t₂) h' (.ok .unit)
   | storeErr {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
-      h l.1 = some .freed →
+      h.MapsTo l.1 .freed →
       FrameStep Λ h (.store t₁ t₂) h .err
   | storeMiss {t₁ t₂ : Term} {h : Heap} {l : Loc} :
       t₁.eval = some (.loc l) →
@@ -217,19 +220,19 @@ inductive FrameStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
       FrameStep Λ h (.store t₁ t₂) h (.miss l)
   | storeMissBlock {t₁ t₂ : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t₁.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
+      h.MapsTo l.1 (.block sz bh) → l.2 ∉ bh.dom →
       FrameStep Λ h (.store t₁ t₂) h (.miss l)
   | load {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} {v : Val} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → bh l.2 = some (.val v) →
+      h.MapsTo l.1 (.block sz bh) → bh.MapsTo l.2 (.val v) →
       FrameStep Λ h (.load t) h (.ok v)
   | loadErr {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
-      h l.1 = some .freed →
+      h.MapsTo l.1 .freed →
       FrameStep Λ h (.load t) h .err
   | loadErrBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → bh l.2 = some .poison →
+      h.MapsTo l.1 (.block sz bh) → bh.MapsTo l.2 .poison →
       FrameStep Λ h (.load t) h .err
   | loadMiss {t : Term} {h : Heap} {l : Loc} :
       t.eval = some (.loc l) →
@@ -237,10 +240,10 @@ inductive FrameStep (Λ : Library) : Heap → Expr → Heap → Exit → Prop
       FrameStep Λ h (.load t) h (.miss l)
   | loadMissBlock {t : Term} {h : Heap} {l : Loc} {sz : ℕ} {bh : BlockHeap} :
       t.eval = some (.loc l) →
-      h l.1 = some (.block sz bh) → l.2 ∉ bh.dom →
+      h.MapsTo l.1 (.block sz bh) → l.2 ∉ bh.dom →
       FrameStep Λ h (.load t) h (.miss l)
   | call {f : Fid} {xs e τ P} {ts : List Term} {h h' : Heap} {ε : Exit} :
-      Λ.get f = some ⟨xs, e, τ, P⟩ → FrameStep Λ h (e.substs (xs.map Prod.fst) ts) h' ε →
+      Λ.MapsTo f ⟨xs, e, τ, P⟩ → FrameStep Λ h (e.substs (xs.map Prod.fst) ts) h' ε →
       FrameStep Λ h (.call f ts) h' ε
 
 @[inherit_doc] scoped notation:50 Λ:51 " ⊢ " "⟨" h " | " e "⟩" " ⇓ᵢ " "⟨" h' " | " ε "⟩" =>
@@ -277,70 +280,70 @@ theorem frame_addition {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩ �
   | alloc ht hnin hofs heq =>
     intro hF hdisj'
     subst heq
-    rw [hupdate_disj] at hdisj'
+    rw [Heap.update_disj] at hdisj'
     obtain ⟨hdisj, hnin'⟩ := hdisj'
     left
-    rw [hupdate_union (hupdate_disj.mpr ⟨hdisj, hnin'⟩)]
+    rw [Heap.update_union (Heap.update_disj.mpr ⟨hdisj, hnin'⟩)]
     refine ⟨.alloc ht ?_ hofs rfl, hdisj⟩
     simp_all
   | free ht hsome hofs hcov heq =>
     intro hF hdisj'
     subst heq
-    rw [hupdate_disj] at hdisj'
+    rw [Heap.update_disj] at hdisj'
     obtain ⟨hdisj, hnin'⟩ := hdisj'
     left
-    rw [hupdate_union (hupdate_disj.mpr ⟨hdisj, hnin'⟩)]
-    exact ⟨.free ht (PMap.union_apply_some_l hsome) hofs hcov rfl, hdisj⟩
+    rw [Heap.update_union (Heap.update_disj.mpr ⟨hdisj, hnin'⟩)]
+    exact ⟨.free ht (PFun.union_apply_some_l hsome) hofs hcov rfl, hdisj⟩
   | freeErr ht hsome =>
-    exact fun hF hdisj => .inl ⟨.freeErr ht (PMap.union_apply_some_l hsome), hdisj⟩
+    exact fun hF hdisj => .inl ⟨.freeErr ht (PFun.union_apply_some_l hsome), hdisj⟩
   | freeErrBlock ht hofs =>
     exact fun hF hdisj => .inl ⟨.freeErrBlock ht hofs, hdisj⟩
   | freeMiss ht hnin =>
     intro hF hdisj
     rename_i t hh l
-    rcases hl : hF l.1 with _ | bv
+    by_cases hl : l.1 ∈ hF.dom
+    · exact .inr ⟨l, rfl, hl⟩
     · refine .inl ⟨.freeMiss ht ?_, hdisj⟩
       simp_all
-    · exact .inr ⟨l, rfl, by simp [hl]⟩
   | freeMissBlock ht hsome hlt hnin =>
     exact fun hF hdisj =>
-      .inl ⟨.freeMissBlock ht (PMap.union_apply_some_l hsome) hlt hnin, hdisj⟩
+      .inl ⟨.freeMissBlock ht (PFun.union_apply_some_l hsome) hlt hnin, hdisj⟩
   | store ht₁ ht₂ hsome hdom heq =>
     intro hF hdisj'
     subst heq
-    rw [hupdate_disj] at hdisj'
+    rw [Heap.update_disj] at hdisj'
     obtain ⟨hdisj, hnin'⟩ := hdisj'
     left
-    rw [hupdate_union (hupdate_disj.mpr ⟨hdisj, hnin'⟩)]
-    exact ⟨.store ht₁ ht₂ (PMap.union_apply_some_l hsome) hdom rfl, hdisj⟩
+    rw [Heap.update_union (Heap.update_disj.mpr ⟨hdisj, hnin'⟩)]
+    exact ⟨.store ht₁ ht₂ (PFun.union_apply_some_l hsome) hdom rfl, hdisj⟩
   | storeErr ht hsome =>
-    exact fun hF hdisj => .inl ⟨.storeErr ht (PMap.union_apply_some_l hsome), hdisj⟩
+    exact fun hF hdisj => .inl ⟨.storeErr ht (PFun.union_apply_some_l hsome), hdisj⟩
   | storeMiss ht hnin =>
     intro hF hdisj
     rename_i t₁ t₂ hh l
-    rcases hl : hF l.1 with _ | bv
+    by_cases hl : l.1 ∈ hF.dom
+    · exact .inr ⟨l, rfl, hl⟩
     · refine .inl ⟨.storeMiss ht ?_, hdisj⟩
       simp_all
-    · exact .inr ⟨l, rfl, by simp [hl]⟩
   | storeMissBlock ht hsome hnin =>
     exact fun hF hdisj =>
-      .inl ⟨.storeMissBlock ht (PMap.union_apply_some_l hsome) hnin, hdisj⟩
+      .inl ⟨.storeMissBlock ht (PFun.union_apply_some_l hsome) hnin, hdisj⟩
   | load ht hsome hval =>
-    exact fun hF hdisj => .inl ⟨.load ht (PMap.union_apply_some_l hsome) hval, hdisj⟩
+    exact fun hF hdisj => .inl ⟨.load ht (PFun.union_apply_some_l hsome) hval, hdisj⟩
   | loadErr ht hsome =>
-    exact fun hF hdisj => .inl ⟨.loadErr ht (PMap.union_apply_some_l hsome), hdisj⟩
+    exact fun hF hdisj => .inl ⟨.loadErr ht (PFun.union_apply_some_l hsome), hdisj⟩
   | loadErrBlock ht hsome hval =>
-    exact fun hF hdisj => .inl ⟨.loadErrBlock ht (PMap.union_apply_some_l hsome) hval, hdisj⟩
+    exact fun hF hdisj => .inl ⟨.loadErrBlock ht (PFun.union_apply_some_l hsome) hval, hdisj⟩
   | loadMiss ht hnin =>
     intro hF hdisj
     rename_i t hh l
-    rcases hl : hF l.1 with _ | bv
+    by_cases hl : l.1 ∈ hF.dom
+    · exact .inr ⟨l, rfl, hl⟩
     · refine .inl ⟨.loadMiss ht ?_, hdisj⟩
       simp_all
-    · exact .inr ⟨l, rfl, by simp [hl]⟩
   | loadMissBlock ht hsome hnin =>
     exact fun hF hdisj =>
-      .inl ⟨.loadMissBlock ht (PMap.union_apply_some_l hsome) hnin, hdisj⟩
+      .inl ⟨.loadMissBlock ht (PFun.union_apply_some_l hsome) hnin, hdisj⟩
   | call hf hstep ih =>
     intro hF hdisj'
     rcases ih hF hdisj' with ⟨hstepF, hdisj⟩ | hmiss
@@ -381,23 +384,23 @@ theorem frame_subtraction {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩
   | alloc ht hnin hofs heq =>
     intro hs hF hheap hdisj
     subst heq hheap
-    rw [PMap.dom_union, Set.mem_union, not_or] at hnin
-    refine ⟨hstore hs _ _ (balloc _), hupdate_disj.mpr ⟨hdisj, hnin.2⟩,
+    rw [PFun.dom_union, Set.mem_union, not_or] at hnin
+    refine ⟨hs.store _ _ (BlockHeap.alloc _), Heap.update_disj.mpr ⟨hdisj, hnin.2⟩,
       .inl ⟨.alloc ht hnin.1 hofs rfl, ?_⟩⟩
-    rw [hupdate_union (hupdate_disj.mpr ⟨hdisj, hnin.2⟩)]
+    rw [Heap.update_union (Heap.update_disj.mpr ⟨hdisj, hnin.2⟩)]
   | free ht hsome hofs hcov heq =>
     intro hs hF hheap hdisj
     subst heq hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · have hFnone := hdisj.some_l hsome'
-      refine ⟨hfree hs _, hupdate_disj.mpr ⟨hdisj, by simp [hFnone]⟩,
+      refine ⟨hs.free _, Heap.update_disj.mpr ⟨hdisj, by simp [hFnone]⟩,
         .inl ⟨.free ht hsome' hofs hcov rfl, ?_⟩⟩
-      rw [hupdate_union (hupdate_disj.mpr ⟨hdisj, by simp [hFnone]⟩)]
+      rw [Heap.update_union (Heap.update_disj.mpr ⟨hdisj, by simp [hFnone]⟩)]
     · exact ⟨hs, hdisj, .inr ⟨_, .freeMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | freeErr ht hsome =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.freeErr ht hsome', rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .freeMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | freeErrBlock ht hofs =>
@@ -411,22 +414,22 @@ theorem frame_subtraction {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩
   | freeMissBlock ht hsome hlt hnin =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.freeMissBlock ht hsome' hlt hnin, rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .freeMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | store ht₁ ht₂ hsome hdom heq =>
     intro hs hF hheap hdisj
     subst heq hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
-    · refine ⟨hstore hs _ _ (bupdate _ _ _),
-        PMap.disjoint_some_insert _ hsome' hdisj,
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    · refine ⟨hs.store _ _ (BlockHeap.update _ _ _),
+        PFun.disjoint_some_insert _ hsome' hdisj,
         .inl ⟨.store ht₁ ht₂ hsome' hdom rfl, ?_⟩⟩
-      exact (hupdate_union (PMap.disjoint_some_insert _ hsome' hdisj)).symm
+      exact (Heap.update_union (PFun.disjoint_some_insert _ hsome' hdisj)).symm
     · exact ⟨hs, hdisj, .inr ⟨_, .storeMiss ht₁ (by simp [hnone]), by simp [hsome']⟩⟩
   | storeErr ht hsome =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.storeErr ht hsome', rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .storeMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | storeMiss ht hnin =>
@@ -436,25 +439,25 @@ theorem frame_subtraction {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩
   | storeMissBlock ht hsome hnin =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.storeMissBlock ht hsome' hnin, rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .storeMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | load ht hsome hval =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.load ht hsome' hval, rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .loadMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | loadErr ht hsome =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.loadErr ht hsome', rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .loadMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | loadErrBlock ht hsome hval =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.loadErrBlock ht hsome' hval, rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .loadMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | loadMiss ht hnin =>
@@ -464,7 +467,7 @@ theorem frame_subtraction {Λ : Library} {h e h' ε} (hstep : Λ ⊢ ⟨h | e⟩
   | loadMissBlock ht hsome hnin =>
     intro hs hF hheap hdisj
     subst hheap
-    rcases PMap.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
+    rcases PFun.union_apply_eq_some.mp hsome with hsome' | ⟨hnone, hsome'⟩
     · exact ⟨hs, hdisj, .inl ⟨.loadMissBlock ht hsome' hnin, rfl⟩⟩
     · exact ⟨hs, hdisj, .inr ⟨_, .loadMiss ht (by simp [hnone]), by simp [hsome']⟩⟩
   | call hf hstep ih =>

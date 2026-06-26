@@ -119,7 +119,7 @@ ownership of `𝕋` also satisfies the affine ownership of any sub-permutation
 theorem iterOwnTypes_subperm_weaken {𝕋 𝕋' : List Typing} (hsub : 𝕋'.Subperm 𝕋)
     {h : Heap} (hh : hprop h ([∗ₜ 𝕋])) : hprop h ([∗ₜ 𝕋']) := by
   rcases hh with ⟨ ha, hb, hab, h₁, h₂ ⟩;
-  obtain ⟨ ha', hb', hab', h₁', h₂' ⟩ := hiter_subperm ownType hsub h₂.1;
+  obtain ⟨ ha', hb', hab', h₁', h₂' ⟩ := hIter_subperm ownType hsub h₂.1;
   refine' ⟨ ha', hb' ∪ hb, _, _, _, _ ⟩ <;> simp_all +decide [ PMap.union_assoc ]
 
 /-- Splitting the affine ownership of an appended list of typings. -/
@@ -128,8 +128,8 @@ theorem iterOwnTypes_append_split {𝕋 𝕍 : List Typing} {h : Heap}
     ∃ h₁ h₂, h = h₁ ∪ h₂ ∧ h₁ ##ₘ h₂ ∧ hprop h₁ ([∗ₜ 𝕋]) ∧ hprop h₂ ([∗ₜ 𝕍]) := by
   have h_split : hprop h (Asrt.iter 𝕋 ownType ∗ Asrt.iter 𝕍 ownType ∗ .true) → ∃ h₁ h₂ h₃, h = h₁ ∪ h₂ ∪ h₃ ∧ h₁ ##ₘ h₂ ∧ h₁ ##ₘ h₃ ∧ h₂ ##ₘ h₃ ∧ hprop h₁ (Asrt.iter 𝕋 ownType) ∧ hprop h₂ (Asrt.iter 𝕍 ownType) ∧ hprop h₃ .true := by
     intro hh;
-    obtain ⟨ h₁, h₂, hh₁, hh₂, hh₃ ⟩ := hprop_star.mp hh;
-    obtain ⟨ h₃, h₄, hh₄, hh₅, hh₆ ⟩ := hprop_star.mp hh₃.2; use h₁, h₃, h₄; simp_all +decide [ PMap.union_assoc ] ;
+    obtain ⟨ h₁, h₂, hh₁, hh₂, hh₃ ⟩ := hStar.mp hh;
+    obtain ⟨ h₃, h₄, hh₄, hh₅, hh₆ ⟩ := hStar.mp hh₃.2; use h₁, h₃, h₄; simp_all +decide [ PMap.union_assoc ] ;
   obtain ⟨h₁, h₂, h₃, hh_eq, hh₁₂, hh₁₃, hh₂₃, hh₁, hh₂, hh₃⟩ := h_split (by
   obtain ⟨h₁, h₂, hh₁, hh₂, hh⟩ := hh;
   grind +suggestions);
@@ -153,7 +153,7 @@ theorem iterOwnTypes_append_combine {𝕌 𝕍 : List Typing} {h₁ h₂ : Heap}
   simp_all +decide;
   exact ⟨ a₁ ∪ a₂, t₁ ∪ t₂, rfl, by
     grind +suggestions, by
-    rw [ hiter_app ];
+    rw [ hIter_app ];
     exact ⟨ a₁, a₂, rfl, h_disj.1, h₁h, h₂h ⟩, trivial ⟩
 
 /-- A heap satisfying a single type's ownership (plus an arbitrary disjoint
@@ -161,7 +161,7 @@ remainder) satisfies the affine ownership of the singleton typing list. -/
 theorem iterOwnTypes_singleton_intro {x : Typing} {hx hr : Heap}
     (hdisj : hx ##ₘ hr) (hx_own : hprop hx (ownType x)) :
     hprop (hx ∪ hr) ([∗ₜ [x]]) := by
-  convert hprop_star.mpr _;
+  convert hStar.mpr _;
   aesop
 
 /-- Introduction for the ownership of `box τ`: a cell pointing to `w` together
@@ -219,8 +219,8 @@ theorem own_store_affine_extract {h : Heap} {vl v : Val} {τ₁ : Option Ty} {τ
     obtain ⟨ h₇, h₈, h₉, h₁₀, h₁₁ ⟩ := h₅;
     cases h₁₁.1;
     contradiction;
-  · obtain ⟨ ha, hR, hR_true, hR_eq ⟩ := hprop_star.mp hP;
-    obtain ⟨ ha', hR', hR'_true, hR'_eq ⟩ := hprop_star.mp hR_eq.2.1;
+  · obtain ⟨ ha, hR, hR_true, hR_eq ⟩ := hStar.mp hP;
+    obtain ⟨ ha', hR', hR'_true, hR'_eq ⟩ := hStar.mp hR_eq.2.1;
     cases hR'_eq.2.1 ; tauto;
   · rename_i l;
     obtain ⟨ha, hR, h_eq, h_disj, h_own⟩ : ∃ ha hR, h = ha ∪ hR ∧ ha ##ₘ hR ∧ hprop ha ((own τ₁).own [.loc l]) ∧ hprop hR ((τ₂.own [v] ∗ .emp) ∗ .true) := by

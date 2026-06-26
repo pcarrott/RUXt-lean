@@ -9,7 +9,7 @@ abbrev Block := ℕ
 /-- Memory locations: a block together with an offset into it. -/
 abbrev Loc := Block × ℕ
 /-- `offset l i` shifts the location `l` by `i` cells (`l +ₗ i`). -/
-def Loc.offset (l : Loc) (i : ℕ) : Loc := (l.1, l.2 + i)
+def Loc.offset : Loc → ℕ → Loc | ⟨b, i⟩, n => (b, i + n)
 @[inherit_doc] scoped infixl:65 " +ₗ " => Loc.offset
 
 /-- The offset of a location by zero is the location itself. -/
@@ -250,7 +250,7 @@ def Expr.subst (e : Expr) (bx : Binder) (v : Val) : Expr :=
 
 /-- Substitution by a list of terms (`e ⌊ ts [//] xs ⌋ₜ`). -/
 def Expr.substs (e : Expr) (xs : List PVar) (ts : List Term) : Expr :=
-  (xs.zip ts).foldl (fun e xt => e.substTerm xt.1 xt.2) e
+  (xs.zip ts).foldl (fun e (x, t) => e.substTerm x t) e
 
 @[simp] theorem Expr.substs_nil_l (e : Expr) (ts : List Term) : e.substs [] ts = e := rfl
 @[simp] theorem Expr.substs_nil_r (e : Expr) (xs : List PVar) : e.substs xs [] = e := by

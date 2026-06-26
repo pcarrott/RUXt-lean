@@ -1,4 +1,4 @@
-import RUXt.Lib.PMap
+import RUXt.Lib.PFun
 import RUXt.Lang.Types
 import RUXt.Lang.Lang
 
@@ -12,10 +12,10 @@ structure FunImpl where
   paramsNodup : (params.map Prod.fst).Nodup
 
 /-- Libraries map function identifiers to their implementations. -/
-def Library := PMap Fid FunImpl
+def Library := PFun Fid FunImpl
 
-/-- Get the implementation of a function by its identifier. -/
-def Library.get : Library → Fid → Option FunImpl
-  | Λ, f => Λ f
+/-- Function `f` exists in library `Λ` with implementation `γ` -/
+def Library.MapsTo (Λ : Library) (f : Fid) (γ : FunImpl) : Prop :=
+  Λ f = γ
 
 end RUXt

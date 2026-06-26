@@ -11,16 +11,16 @@ tuple.
 ## Universe polymorphism
 The definitions here are *universe polymorphic*.  A telescope `Tele.{u}` stores
 binder types in `Type u`, while the result type `A` of a telescopic function lives in
-`Type (max u v)` for an independent universe parameter `v`.  Concretely, this lifts
+`Type (max u a)` for an independent universe parameter `a`.  Concretely, this lifts
 the restriction that the result of `TT -t> A` must live in `Type` (i.e. `Type 0`).
 Lean 4 has no universe cumulativity, so the result universe must be at least the universe
-of the telescope's binders; phrasing the result type as `Type (max u v)` captures exactly
-this requirement while leaving both `u` and `v` free.
+of the telescope's binders; phrasing the result type as `Type (max u a)` captures exactly
+this requirement while leaving both `u` and `a` free.
 -/
 
 namespace RUXt
 
-universe u v w x
+universe u a b c
 
 /-- A telescope: an inductively defined, possibly dependent, sequence of argument types.
 The binder types live in an arbitrary universe `Type u`. -/
@@ -33,10 +33,10 @@ inductive Tele : Type (u + 1) where
 
 /-- The telescope version of a function type: `TeleFun TT A` is the type of functions
 taking the arguments described by `TT` and returning `A` (notation `TT -t> A`).
-The result type `A` may live in any universe `Type (max u v)`, i.e. any universe at least
+The result type `A` may live in any universe `Type (max u a)`, i.e. any universe at least
 as large as the universe `u` of the telescope's binders. In particular `A` is **not**
 restricted to `Type 0`. -/
-def TeleFun : Tele.{u} → Type (max u v) → Type (max u v)
+def TeleFun : Tele.{u} → Type (max u a) → Type (max u a)
   | Tele.nil, A => A
   | Tele.cons binder, A => ∀ x, TeleFun (binder x) A
 @[inherit_doc] infixr:25 " -t> " => TeleFun
@@ -48,30 +48,30 @@ def TeleArg : Tele.{u} → Type u
   | Tele.cons binder => Σ x, TeleArg (binder x)
 
 /-- Apply a telescopic function to an argument tuple. -/
-def TeleFun.apply : {TT : Tele.{u}} → {A : Type (max u v)} → (TT -t> A) → TeleArg TT → A
+def TeleFun.apply : {TT : Tele.{u}} → {A : Type (max u a)} → (TT -t> A) → TeleArg TT → A
   | Tele.nil, _, t, _ => t
   | Tele.cons _, _, f, a => apply (f a.1) a.2
 
 /-- Map a function over the result of a telescopic function. -/
-def TeleFun.map {A : Type (max u v)} {B : Type (max u w)} :
+def TeleFun.map {A : Type (max u a)} {B : Type (max u b)} :
     {TT : Tele.{u}} → (TT -t> A) → (A → B) → (TT -t> B)
   | Tele.nil, t, F => F t
   | Tele.cons _, t, F => fun x => map (t x) F
 
 /-- Turn an ordinary function on argument tuples into a telescopic function. -/
-def teleBind : {TT : Tele.{u}} → {A : Type (max u v)} → (TeleArg TT → A) → (TT -t> A)
+def teleBind : {TT : Tele.{u}} → {A : Type (max u a)} → (TeleArg TT → A) → (TT -t> A)
   | Tele.nil, _, F => F PUnit.unit
   | Tele.cons _, _, F => fun x => teleBind (fun a => F ⟨x, a⟩)
 
 /-- Telescopic application and mapping commute. -/
-theorem teleMap_apply {A : Type (max u v)} {B : Type (max u w)} (F : A → B) :
+theorem teleMap_apply {A : Type (max u a)} {B : Type (max u b)} (F : A → B) :
     {TT : Tele.{u}} → (t : TT -t> A) → (y : TeleArg TT) →
       (t.map F).apply y = F (t.apply y)
   | Tele.nil, _, _ => rfl
   | Tele.cons _, t, y => teleMap_apply F (t y.1) y.2
 
 /-- Application to a bound telescopic function recovers the original function. -/
-theorem teleBind_apply {A : Type (max u v)} :
+theorem teleBind_apply {A : Type (max u a)} :
     {TT : Tele.{u}} → (f : TeleArg TT → A) → (x : TeleArg TT) →
       (teleBind f).apply x = f x
   | Tele.nil, f, x => by
@@ -86,15 +86,15 @@ def Tele.app : Tele.{u} → Tele.{u} → Tele.{u}
   | Tele.cons b, tt2 => Tele.cons (fun x => app (b x) tt2)
 
 /-- Merge two telescopic functions over appended telescopes using a binary combiner. -/
-def teleMerge {A : Type (max u v)} {B : Type (max u w)} {C : Type (max u x)}
+def teleMerge {A : Type (max u a)} {B : Type (max u b)} {C : Type (max u c)}
     (merge : A → B → C) :
     {tt1 tt2 : Tele.{u}} → (tt1 -t> A) → (tt2 -t> B) → (tt1.app tt2 -t> C)
   | Tele.nil, _, P1, P2 => P2.map (fun P => merge P1 P)
   | Tele.cons _, _, P1, P2 => fun y => teleMerge merge (P1 y) P2
 
 /-- Specification of application to a merged telescopic function. -/
-theorem teleMerge_apply {tt1 tt2 : Tele.{u}} {A : Type (max u v)} {B : Type (max u w)}
-    {C : Type (max u x)} (merge : A → B → C)
+theorem teleMerge_apply {tt1 tt2 : Tele.{u}} {A : Type (max u a)} {B : Type (max u b)}
+    {C : Type (max u c)} (merge : A → B → C)
     (f : tt1 -t> A) (g : tt2 -t> B) (P : B → Prop) (Q : C → Prop)
     (HP2 : ∀ args', P (g.apply args')) (Hmerge : ∀ a b, P b → Q (merge a b)) :
     ∀ args, Q ((teleMerge merge f g).apply args) := by
@@ -104,6 +104,31 @@ theorem teleMerge_apply {tt1 tt2 : Tele.{u}} {A : Type (max u v)} {B : Type (max
     convert Hmerge f (g.apply args) (hg args) using 1
     convert teleMap_apply (fun y => merge f y) g args using 1
   · grind +locals
+
+/-- Project the first component of an argument tuple for an appended telescope. -/
+def TeleArg.fst : {tt1 tt2 : Tele.{u}} → TeleArg (tt1.app tt2) → TeleArg tt1
+  | Tele.nil, _, _ => PUnit.unit
+  | Tele.cons _, _, arg => ⟨arg.1, TeleArg.fst arg.2⟩
+
+/-- Project the second component of an argument tuple for an appended telescope. -/
+def TeleArg.snd : {tt1 tt2 : Tele.{u}} → TeleArg (tt1.app tt2) → TeleArg tt2
+  | Tele.nil, _, arg => arg
+  | Tele.cons _, _, arg => TeleArg.snd arg.2
+
+/-- Applying a merged telescopic function splits the
+argument tuple into its two halves and combines the two applications. -/
+theorem teleMerge_apply_eq {A : Type (max u a)} {B : Type (max u b)} {C : Type (max u c)}
+    (merge : A → B → C) :
+    {tt1 tt2 : Tele.{u}} → (f : tt1 -t> A) → (g : tt2 -t> B) →
+      (arg : TeleArg (tt1.app tt2)) →
+      (teleMerge merge f g).apply arg = merge (f.apply arg.fst) (g.apply arg.snd)
+  | Tele.nil, _, f, g, arg => by
+      show (g.map (fun P => merge f P)).apply arg = _
+      rw [teleMap_apply]; rfl
+  | Tele.cons _, _, f, g, arg => by
+      obtain ⟨x, rest⟩ := arg
+      show (teleMerge merge (f x) g).apply rest = _
+      rw [teleMerge_apply_eq merge (f x) g rest]; rfl
 
 /-!
 ## The `[tele ...]` notation

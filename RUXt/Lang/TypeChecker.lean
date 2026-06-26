@@ -1,14 +1,9 @@
-/-
-Port of `theories/model/typechecker.v`: function type signatures and safe
-programs.
--/
 import RUXt.Lang.Library
 
 namespace RUXt
 
 /-! ### Base types -/
 
-/-- `val_type`. -/
 def Val.baseTy : Val → BaseType
   | .int _ => .int
   | .bool _ => .bool
@@ -22,252 +17,202 @@ def Val.ty : Val → Ty
 /-! ### Typed variable contexts -/
 
 /-- Typed variable contexts. -/
-abbrev VarCtx := PMap PVar Ty
+abbrev VarCtx := PFun PVar Ty
 
-/-- `cons_var_ctx`. -/
 def consVarCtx (xs : List PVar) (τs : List Ty) : VarCtx :=
-  (xs.zip τs).foldr (fun xτ m => m.insert xτ.1 xτ.2) ∅
+  (xs.zip τs).foldr (fun (x, τ) 𝕍 => 𝕍.insert x τ) ∅
 
-/-- `insert_var_ctx`. -/
-theorem insert_var_ctx {xs : List PVar} {τs : List Ty} (x : PVar) (τ : Ty)
-    (_ : xs.length = τs.length) :
+def VarCtx.consFrom (𝕍 : VarCtx) (xs : List PVar) (τs : List Ty) : VarCtx :=
+  (xs.zip τs).foldl (fun 𝕍 (x, τ) => 𝕍.insert x τ) 𝕍
+
+private theorem consVarCtx_insert {xs : List PVar} {τs : List Ty} (x : PVar) (τ : Ty) :
     (consVarCtx xs τs).insert x τ = consVarCtx (x :: xs) (τ :: τs) := rfl
 
-/-- `lookup_var_ctx_None`. -/
-theorem lookup_var_ctx_none {xs : List PVar} {τs : List Ty} {x : PVar}
-    (hlen : xs.length = τs.length) (hnin : x ∉ xs) :
-    consVarCtx xs τs x = none := by
+private theorem consVarCtx_lookup_none {xs : List PVar} {τs : List Ty} {x : PVar}
+    (hnin : x ∉ xs) : consVarCtx xs τs x = Part.none := by
   induction xs generalizing τs with
   | nil => rfl
   | cons y ys ih =>
     cases τs with
-    | nil => simp at hlen
+    | nil => simp [consVarCtx]
     | cons τ τs =>
       simp only [List.mem_cons, not_or] at hnin
-      show PMap.insert y τ (consVarCtx ys τs) x = none
-      rw [PMap.insert_apply_ne _ _ hnin.1]
-      exact ih (by simpa using hlen) hnin.2
+      rw [← consVarCtx_insert y τ, PFun.insert_apply_ne _ _ hnin.1]
+      exact ih hnin.2
 
-private theorem foldr_insert_comm (l : List (PVar × Ty)) (x : PVar) (τ : Ty)
-    (m : VarCtx) (hx : ∀ p ∈ l, p.1 ≠ x) :
-    l.foldr (fun xτ m => m.insert xτ.1 xτ.2) (m.insert x τ)
-      = (l.foldr (fun xτ m => m.insert xτ.1 xτ.2) m).insert x τ := by
-  induction l with
-  | nil => rfl
-  | cons p l ih =>
-    simp only [List.foldr_cons]
-    rw [ih fun q hq => hx q (List.mem_cons_of_mem p hq),
-      PMap.insert_comm (hx p List.mem_cons_self)]
-
-/-- `reverse_var_ctx`. -/
-theorem reverse_var_ctx {xs : List PVar} {τs : List Ty}
-    (hlen : xs.length = τs.length) (hdup : xs.Nodup) :
-    consVarCtx xs τs = consVarCtx xs.reverse τs.reverse := by
-  induction xs generalizing τs with
-  | nil => rfl
-  | cons x xs ih =>
-    cases τs with
-    | nil => simp at hlen
-    | cons τ τs =>
-      obtain ⟨hx, hdup'⟩ := List.nodup_cons.mp hdup
-      have hlen' : xs.length = τs.length := by simpa using hlen
-      show PMap.insert x τ (consVarCtx xs τs) = _
-      rw [ih hlen' hdup']
-      simp only [List.reverse_cons]
-      unfold consVarCtx
-      rw [List.zip_append (by simpa using hlen'), List.foldr_append]
-      exact (foldr_insert_comm _ x τ ∅ fun p hp h =>
-        hx (h ▸ List.mem_reverse.mp (List.of_mem_zip hp).1)).symm
+theorem consVarCtx_eq_rev {xs : List PVar} {τs : List Ty} (hdup : xs.Nodup) :
+    (∅ : VarCtx).consFrom xs τs = consVarCtx xs τs := by
+  have h_consVarCtx {xs : List PVar} {τs : List Ty} : xs.Nodup →
+      ∀ (𝕍 : VarCtx),
+        List.foldl (fun 𝕍 (x, τ) => PFun.insert x τ 𝕍) 𝕍 (xs.zip τs) = (consVarCtx xs τs) ∪ 𝕍 := by
+    revert τs
+    induction xs with
+    | nil => intro τs _ m; simp [consVarCtx, PFun.empty_union]
+    | cons x xs ih =>
+      intro τs hdup m
+      rcases τs with _ | ⟨τ, τs⟩
+      · simp [consVarCtx]
+      · obtain ⟨hnin, hdup'⟩ := List.nodup_cons.mp hdup
+        rw [List.zip_cons_cons, List.foldl_cons, ← consVarCtx_insert x τ,
+          PFun.insert_union_l, ih hdup' (PFun.insert x τ m)]
+        ext y
+        by_cases hy : y = x
+        · subst hy
+          simp [PFun.union_apply, PFun.insert_apply,
+            consVarCtx_lookup_none hnin, Part.not_none_dom]
+        · simp [PFun.union_apply, PFun.insert_apply, hy]
+  rw [VarCtx.consFrom, h_consVarCtx hdup ∅, PFun.union_empty]
 
 /-! ### Well-typed terms -/
 
-/-- `check_term`: a term is a value of the right base type or a well-typed
-variable. -/
-def checkTerm (𝕍 : VarCtx) (t : Term) (τ : Ty) : Bool :=
+/-- A term checks against `τ` when it is a value of the right base
+type or a variable bound to `τ` in the context. -/
+private def CheckTerm (𝕍 : VarCtx) (t : Term) (τ : Ty) : Prop :=
   match t with
-  | .var x => 𝕍 x = some τ
+  | .var x => 𝕍 x = τ
   | .val v => Ty.base v.baseTy = τ
 
-/-- `check_terms`. -/
-def checkTerms (𝕍 : VarCtx) : List Term → List Ty → Bool
-  | [], [] => Bool.true
-  | t :: ts, τ :: τs => checkTerm 𝕍 t τ && checkTerms 𝕍 ts τs
-  | _, _ => Bool.false
+/-- A list of terms checks against a list of types when they have
+the same length and check pointwise. -/
+private def CheckTerms (𝕍 : VarCtx) : List Term → List Ty → Prop
+  | [], [] => True
+  | t :: ts, τ :: τs => CheckTerm 𝕍 t τ ∧ CheckTerms 𝕍 ts τs
+  | _, _ => False
 
-/-- `check_terms_subseteq`. -/
-theorem checkTerms_subset {𝕍 𝕍' : VarCtx} {ts : List Term} {τs : List Ty}
-    (hcheck : checkTerms 𝕍' ts τs = Bool.true) (hsub : 𝕍' ⊆ 𝕍) :
-    checkTerms 𝕍 ts τs = Bool.true := by
+private theorem checkTerms_subset {𝕍 𝕍' : VarCtx} {ts : List Term} {τs : List Ty}
+    (hcheck : CheckTerms 𝕍' ts τs) (hsub : 𝕍' ⊆ 𝕍) :
+    CheckTerms 𝕍 ts τs := by
   induction ts generalizing τs with
-  | nil => cases τs <;> simp_all [checkTerms]
+  | nil => cases τs <;> simp_all [CheckTerms]
   | cons t ts ih =>
     cases τs with
-    | nil => simp_all [checkTerms]
+    | nil => exact hcheck.elim
     | cons τ τs =>
-      simp only [checkTerms, Bool.and_eq_true] at hcheck ⊢
-      refine ⟨?_, ih hcheck.2⟩
+      obtain ⟨h1, h2⟩ := hcheck
+      refine ⟨?_, ih h2⟩
       cases t with
-      | val v => exact hcheck.1
-      | var x =>
-        simp only [checkTerm, decide_eq_true_eq] at hcheck ⊢
-        exact PMap.subset_apply hsub hcheck.1
+      | val v => exact h1
+      | var x => exact PFun.subset_apply hsub h1
 
-/-- `check_terms_cons`. -/
-theorem checkTerms_consVarCtx {xs : List PVar} {τs : List Ty}
+private theorem checkTerms_consVarCtx {xs : List PVar} {τs : List Ty}
     (hlen : xs.length = τs.length) (hdup : xs.Nodup) :
-    checkTerms (consVarCtx xs τs) (Term.ofVars xs) τs = Bool.true := by
+    CheckTerms (consVarCtx xs τs) (Term.ofVars xs) τs := by
   induction xs generalizing τs with
-  | nil => cases τs <;> simp_all [checkTerms, Term.ofVars]
+  | nil => cases τs <;> simp_all [CheckTerms, Term.ofVars]
   | cons x xs ih =>
     cases τs with
     | nil => simp at hlen
     | cons τ τs =>
       obtain ⟨hnin, hdup'⟩ := List.nodup_cons.mp hdup
       have hlen' : xs.length = τs.length := by simpa using hlen
-      rw [← insert_var_ctx x τ hlen']
-      simp only [Term.ofVars_cons, checkTerms, Bool.and_eq_true]
-      constructor
-      · simp [checkTerm]
+      rw [← consVarCtx_insert x τ]
+      simp only [Term.ofVars_cons, CheckTerms]
+      refine ⟨?_, ?_⟩
+      · show (PFun.insert x τ (consVarCtx xs τs)) x = τ
+        simp [PFun.insert_apply]
       · refine checkTerms_subset (ih hlen' hdup') ?_
         intro a b hab
         by_cases hax : a = x
         · subst hax
-          rw [lookup_var_ctx_none hlen' hnin] at hab
+          rw [consVarCtx_lookup_none hnin] at hab
           exact absurd hab (by simp)
-        · rwa [PMap.insert_apply_ne _ _ hax]
+        · rwa [PFun.insert_apply_ne _ _ hax]
 
-/-- `check_terms_dom`. -/
-theorem checkTerms_dom {𝕍 : VarCtx} {ts : List Term} {τs : List Ty} {x : PVar}
-    (hcheck : checkTerms 𝕍 ts τs = Bool.true) (hin : Term.var x ∈ ts) :
+private theorem checkTerms_dom {𝕍 : VarCtx} {ts : List Term} {τs : List Ty} {x : PVar}
+    (hcheck : CheckTerms 𝕍 ts τs) (hin : Term.var x ∈ ts) :
     x ∈ 𝕍.dom := by
   induction ts generalizing τs with
   | nil => simp at hin
   | cons t ts ih =>
     cases τs with
-    | nil => simp_all [checkTerms]
+    | nil => exact hcheck.elim
     | cons τ τs =>
-      simp only [checkTerms, Bool.and_eq_true] at hcheck
+      obtain ⟨h1, h2⟩ := hcheck
       rcases List.mem_cons.mp hin with rfl | hin'
-      · have := hcheck.1
-        simp only [checkTerm, decide_eq_true_eq] at this
-        exact PMap.mem_dom.mpr ⟨τ, this⟩
-      · exact ih hcheck.2 hin'
+      · have hx : 𝕍 x = τ := h1
+        exact PFun.mem_dom.mpr ⟨τ, hx⟩
+      · exact ih h2 hin'
 
 /-! ### Safe programs -/
 
-/-- `safe_program`: a safe program only has calls to the library. -/
-def safeProgram (𝕍 : VarCtx) (Λ : Library) (e : Expr) : Option Ty :=
+/-- `e` is a safe program of type `τ` in context `𝕍` if it only makes
+calls to library functions whose arguments and result type match. -/
+def SafeProgram (𝕍 : VarCtx) (Λ : Library) (e : Expr) (τ : Ty) : Prop :=
   match e with
   | .letIn bx e₁ e₂ =>
-      match safeProgram 𝕍 Λ e₁ with
-      | some τ =>
-          match bx with
-          | .named x => safeProgram (𝕍.insert x τ) Λ e₂
-          | .anon => safeProgram 𝕍 Λ e₂
-      | none => none
+      ∃ τ₁, SafeProgram ∅ Λ e₁ τ₁ ∧
+        match bx with
+        | .named x => SafeProgram (𝕍.insert x τ₁) Λ e₂ τ
+        | .anon => SafeProgram 𝕍 Λ e₂ τ
   | .call f ts =>
-      match Λ.get f with
-      | some ⟨xs, _, τ, _⟩ => if checkTerms 𝕍 ts (xs.map Prod.snd) then some τ else none
-      | none => none
-  | .pure (.term (.val v)) => some (.base v.baseTy)
-  | _ => none
+      ∃ xs body hdup, Λ.MapsTo f ⟨xs, body, τ, hdup⟩ ∧
+        CheckTerms 𝕍 ts (xs.map Prod.snd)
+  | .pure (.term (.val v)) => τ = v.ty
+  | _ => False
 
-/-- `safe_main`: a main program is a safe program with no free variables. -/
-def safeMain (Λ : Library) (e : Expr) : Option Ty := safeProgram ∅ Λ e
+/-- A main program is a safe program with no free variables. -/
+def SafeMain (Λ : Library) (e : Expr) (τ : Ty) : Prop := SafeProgram ∅ Λ e τ
 
-/-- `safe_program_subseteq`. -/
+theorem safeMain_pure {Λ : Library} {v : Val} :
+    SafeMain Λ (Expr.pure (.val v)) (v.ty) := by
+  tauto
+
 theorem safeProgram_subset {𝕍 𝕍' : VarCtx} {Λ : Library} {e : Expr} {τ : Ty}
-    (hsafe : safeProgram 𝕍' Λ e = some τ) (hsub : 𝕍' ⊆ 𝕍) :
-    safeProgram 𝕍 Λ e = some τ := by
+    (hsafe : SafeProgram 𝕍' Λ e τ) (hsub : 𝕍' ⊆ 𝕍) :
+    SafeProgram 𝕍 Λ e τ := by
   induction e generalizing 𝕍 𝕍' τ with
   | letIn bx e₁ e₂ ih₁ ih₂ =>
-    simp only [safeProgram] at hsafe ⊢
-    cases h₁ : safeProgram 𝕍' Λ e₁ with
-    | none => simp [h₁] at hsafe
-    | some τ₁ =>
-      simp only [h₁] at hsafe
-      simp only [ih₁ h₁ hsub]
-      cases bx with
-      | anon => exact ih₂ hsafe hsub
-      | named x => exact ih₂ hsafe (PMap.insert_mono _ _ hsub)
+    obtain ⟨τ₁, h1, h2⟩ := hsafe
+    refine ⟨τ₁, ih₁ h1 (PFun.empty_subset _), ?_⟩
+    cases bx with
+    | anon => exact ih₂ h2 hsub
+    | named x => exact ih₂ h2 (PFun.insert_mono _ _ hsub)
   | call f ts =>
-    simp only [safeProgram] at hsafe ⊢
-    cases hΛ : Λ.get f with
-    | none => simp [hΛ] at hsafe
-    | some s =>
-      obtain ⟨τs, τ'⟩ := s
-      simp only [hΛ] at hsafe ⊢
-      split at hsafe
-      case isTrue hcheck => rwa [if_pos (checkTerms_subset hcheck hsub)]
-      case isFalse => exact absurd hsafe (by simp)
+    obtain ⟨xs, body, hdup, hΛ, hcheck⟩ := hsafe
+    exact ⟨xs, body, hdup, hΛ, checkTerms_subset hcheck hsub⟩
   | pure p =>
     cases p with
-    | term t => cases t <;> simp_all [safeProgram]
-    | unOp op p => simp_all [safeProgram]
-    | binOp op p₁ p₂ => simp_all [safeProgram]
-  | _ => simp_all [safeProgram]
+    | term t => cases t <;> simp_all [SafeProgram]
+    | unOp op p => exact hsafe.elim
+    | binOp op p₁ p₂ => exact hsafe.elim
+  | _ => exact hsafe.elim
 
-/-- `safe_main_Some`. -/
-theorem safeMain_some {Λ : Library} {e : Expr} {τ : Ty} (𝕍 : VarCtx)
-    (hmain : safeMain Λ e = some τ) :
-    safeProgram 𝕍 Λ e = some τ :=
-  safeProgram_subset hmain (PMap.empty_subset 𝕍)
-
-/-- `safe_call`. -/
 theorem safe_call {Λ : Library} {f : Fid} {xs e τ hdup}
-   (htype : Λ.get f = some ⟨xs, e, τ, hdup⟩) :
-    safeProgram (consVarCtx (xs.map Prod.fst) (xs.map Prod.snd))
-      Λ (.call f (Term.ofVars (xs.map Prod.fst))) = some τ := by
-  simp [safeProgram, htype]
-  rw [checkTerms_consVarCtx _ hdup]; simp
+   (htype : Λ.MapsTo f ⟨xs, e, τ, hdup⟩) :
+    SafeProgram (consVarCtx (xs.map Prod.fst) (xs.map Prod.snd))
+      Λ (.call f (Term.ofVars (xs.map Prod.fst))) τ :=
+  ⟨xs, e, hdup, htype, checkTerms_consVarCtx (by simp) hdup⟩
 
-/-- `safe_program_closed`. -/
-theorem safeProgram_closed {𝕍 : VarCtx} {Λ : Library} {e : Expr} {τ : Ty}
-    (hsafe : safeProgram 𝕍 Λ e = some τ) :
-    e.Closed 𝕍.dom := by
+private theorem safeProgram_closed {𝕍 : VarCtx} {Λ : Library} {e : Expr} {τ : Ty}
+    (hsafe : SafeProgram 𝕍 Λ e τ) : e.Closed 𝕍.dom := by
   induction e generalizing 𝕍 τ with
   | letIn bx e₁ e₂ ih₁ ih₂ =>
-    simp only [safeProgram] at hsafe
-    cases h₁ : safeProgram 𝕍 Λ e₁ with
-    | none => simp [h₁] at hsafe
-    | some τ₁ =>
-      simp only [h₁] at hsafe
-      refine ⟨ih₁ h₁, ?_⟩
-      cases bx with
-      | anon => exact ih₂ hsafe
-      | named x =>
-        have := ih₂ hsafe
-        rw [PMap.dom_insert] at this
-        rwa [Set.union_comm] at this
+    obtain ⟨τ₁, h1, h2⟩ := hsafe
+    refine ⟨ih₁ (safeProgram_subset h1 (PFun.empty_subset _)), ?_⟩
+    cases bx with
+    | anon => exact ih₂ h2
+    | named x =>
+      have hmem := ih₂ h2
+      rw [PFun.dom_insert] at hmem
+      rwa [Set.union_comm] at hmem
   | call f ts =>
-    simp only [safeProgram] at hsafe
-    cases hΛ : Λ.get f with
-    | none => simp [hΛ] at hsafe
-    | some s =>
-      obtain ⟨τs, τ'⟩ := s
-      simp only [hΛ] at hsafe
-      split at hsafe
-      case isFalse => exact absurd hsafe (by simp)
-      case isTrue hcheck =>
-        intro t hin
-        cases t with
-        | val v => trivial
-        | var x => exact checkTerms_dom hcheck hin
+    obtain ⟨xs, body, hdup, hΛ, hcheck⟩ := hsafe
+    intro t hin
+    cases t with
+    | val v => trivial
+    | var x => exact checkTerms_dom hcheck hin
   | pure p =>
     cases p with
     | term t =>
       cases t with
-      | var x => simp_all [safeProgram]
+      | var x => exact hsafe.elim
       | val v => trivial
-    | unOp op p => simp_all [safeProgram]
-    | binOp op p₁ p₂ => simp_all [safeProgram]
-  | _ => simp_all [safeProgram]
+    | unOp op p => exact hsafe.elim
+    | binOp op p₁ p₂ => exact hsafe.elim
+  | _ => exact hsafe.elim
 
-/-- `safe_main_closed`. -/
 theorem safeMain_closed {Λ : Library} {e : Expr} {τ : Ty}
-    (hmain : safeMain Λ e = some τ) :
-    e.ClosedProgram := by
-  have := safeProgram_closed hmain
-  rwa [PMap.dom_empty] at this
+    (hmain : SafeMain Λ e τ) : e.ClosedProgram :=
+  safeProgram_closed hmain
 
 end RUXt
