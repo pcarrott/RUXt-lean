@@ -13,6 +13,9 @@ inductive LExit
 /-- Symbolic triples. -/
 def SymTriple (tt : Tele) : Type 1 :=
   (tt -t> Asrt) × (tt -t> Expr) × LExit × (Val → tt -t> Asrt)
+/-- The exit tag of a function specification. -/
+def SymTriple.exit {tt : Tele} : SymTriple tt → LExit
+  | ⟨_, _, ε, _⟩ => ε
 
 /-- Converts a logical tag to a semantic one, given a value.
 If the value does not match the expected tag, returns `none`. -/
@@ -48,12 +51,12 @@ theorem ux_triple_preservation {tt : Tele} {Λ : Library} {triple : SymTriple tt
   cases εₗ <;> simp [*] at *
   · obtain ⟨h, hP, ε, Hε, hstep⟩ := hux _ _ _ hΦ
     obtain hstep := semantics_preservation hstep
-    injection Hε with Hε; subst Hε
+    cases Hε
     exact ⟨h, hP, .ok v, rfl, hstep⟩
   · obtain ⟨h, hP, ε, Hε, hstep⟩ := hux _ _ _ hΦ
     obtain hstep := semantics_preservation hstep
     let .unit := v
-    injection Hε with Hε; subst Hε
+    cases Hε
     exact ⟨h, hP, .err, rfl, hstep⟩
   · rw [teleBind_apply] at hΦ
     obtain ⟨h1', h', rfl, hdisj, ⟨rfl, rfl⟩, hΦ⟩ := hΦ
@@ -61,7 +64,7 @@ theorem ux_triple_preservation {tt : Tele} {Λ : Library} {triple : SymTriple tt
     obtain ⟨l, hΦ⟩ := hΦ
     obtain ⟨h, hP, ε, Hε, hstep⟩ := hux _ _ _ hΦ
     obtain hstep := semantics_preservation hstep
-    injection Hε with Hε; subst Hε
+    cases Hε
     exact ⟨h, hP, .err, rfl, hstep⟩
 
 theorem ux_frame_triple_spec {tt : Tele} {Λ : Library}
@@ -72,24 +75,23 @@ theorem ux_frame_triple_spec {tt : Tele} {Λ : Library}
   intro args r h' hΦ ε hε
   obtain hux := ux_triple_preservation hux
   cases εₗ
-  · injection hε with hε; subst hε
+  · cases hε
     obtain ⟨h, hP, ε, Hε, hstep⟩ := hux _ _ _ hΦ
-    injection Hε with Hε; subst Hε
+    cases Hε
     exact ⟨h, hP, hstep⟩
   · let .unit := r
-    injection hε with hε; subst hε
+    cases hε
     obtain ⟨h, hP, ε, hε, hstep⟩ := hux _ _ _ hΦ
-    injection hε with hε; subst hε
+    cases hε
     exact ⟨h, hP, hstep⟩
   · let .loc ⟨b, i⟩ := r
-    injection hε with hε; subst hε
+    cases hε
     specialize hux args .unit h' ?_
-    · rw [teleBind_apply]
-      simp [*] at *
+    · simp_all [teleBind_apply]
       exact ⟨b, i, hΦ⟩
-    · obtain ⟨h, hP, ε, hε, hstep⟩ := hux
-      injection hε with hε; subst hε
-      exact ⟨h, hP, hstep⟩
+    obtain ⟨h, hP, ε, hε, hstep⟩ := hux
+    cases hε
+    exact ⟨h, hP, hstep⟩
 
 /-! ### UX logics -/
 

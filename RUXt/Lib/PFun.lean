@@ -77,6 +77,11 @@ theorem union_apply_some_l {m₁ m₂ : PFun α β} {a : α} {b : β} (h : m₁ 
 theorem insert_apply_ne [DecidableEq α] {a a' : α} (b : β) (m : PFun α β) (h : a' ≠ a) :
     insert a b m a' = m a' := by simp [insert_apply, h]
 
+/-- Inserting at a key overwrites any previous insertion at that key. -/
+theorem insert_insert_self {α β : Type*} [DecidableEq α] (a : α) (b c : β) (m : PFun α β) :
+    insert a b (insert a c m) = insert a b m := by
+  ext x; simp only [insert_apply]; split <;> simp
+
 /-! ### Disjointness -/
 
 theorem Disjoint.symm {m₁ m₂ : PFun α β} (h : m₁ ##ₘ m₂) : m₂ ##ₘ m₁ := fun a => (h a).symm

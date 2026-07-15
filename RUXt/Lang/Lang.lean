@@ -46,7 +46,9 @@ deriving DecidableEq
 /-- Binary operations. -/
 inductive BinOp
   | add
-  | le
+  | mod
+  | eq
+  | lt
   | offset
 deriving DecidableEq
 /-- Pure expressions. -/
@@ -116,7 +118,9 @@ abbrev unit : Pure := .term .unit
 abbrev minus (p : Pure) : Pure := .unOp .minus p
 abbrev not (p : Pure) : Pure := .unOp .not p
 abbrev add (p₁ p₂ : Pure) : Pure := .binOp .add p₁ p₂
-abbrev le (p₁ p₂ : Pure) : Pure := .binOp .le p₁ p₂
+abbrev mod (p₁ p₂ : Pure) : Pure := .binOp .mod p₁ p₂
+abbrev eq (p₁ p₂ : Pure) : Pure := .binOp .eq p₁ p₂
+abbrev lt (p₁ p₂ : Pure) : Pure := .binOp .lt p₁ p₂
 abbrev offset (p₁ p₂ : Pure) : Pure := .binOp .offset p₁ p₂
 
 end Pure
@@ -150,7 +154,9 @@ def UnOp.eval : UnOp → Val → Option Val
 /-- Evaluation of binary operations. -/
 def BinOp.eval : BinOp → Val → Val → Option Val
   | .add, .int z₁, .int z₂ => some (.int (z₁ + z₂))
-  | .le, .int z₁, .int z₂ => some (.bool (decide (z₁ ≤ z₂)))
+  | .mod, .int z₁, .int z₂ => some (.int (z₁.tmod z₂))
+  | .eq, .int z₁, .int z₂ => some (.bool (decide (z₁ = z₂)))
+  | .lt, .int z₁, .int z₂ => some (.bool (decide (z₁ < z₂)))
   | .offset, .loc l, .int z => some (.loc (l +ₗ z.toNat))
   | _, _, _ => none
 
@@ -183,9 +189,19 @@ theorem Pure.eval_add {p₁ p₂ : Pure} {z₁ z₂ : ℤ}
     (Pure.add p₁ p₂).eval = some (.int (z₁ + z₂)) := by
   simp [eval, h₁, h₂, BinOp.eval]
 
-theorem Pure.eval_le {p₁ p₂ : Pure} {z₁ z₂ : ℤ}
+theorem Pure.eval_mod {p₁ p₂ : Pure} {z₁ z₂ : ℤ}
+      (h₁ : p₁.eval = some (.int z₁)) (h₂ : p₂.eval = some (.int z₂)) :
+      (Pure.mod p₁ p₂).eval = some (.int (z₁.tmod z₂)) := by
+    simp [eval, h₁, h₂, BinOp.eval]
+
+theorem Pure.eval_eq {p₁ p₂ : Pure} {z₁ z₂ : ℤ}
     (h₁ : p₁.eval = some (.int z₁)) (h₂ : p₂.eval = some (.int z₂)) :
-    (Pure.le p₁ p₂).eval = some (.bool (decide (z₁ ≤ z₂))) := by
+    (Pure.eq p₁ p₂).eval = some (.bool (decide (z₁ = z₂))) := by
+  simp [eval, h₁, h₂, BinOp.eval]
+
+theorem Pure.eval_lt {p₁ p₂ : Pure} {z₁ z₂ : ℤ}
+    (h₁ : p₁.eval = some (.int z₁)) (h₂ : p₂.eval = some (.int z₂)) :
+    (Pure.lt p₁ p₂).eval = some (.bool (decide (z₁ < z₂))) := by
   simp [eval, h₁, h₂, BinOp.eval]
 
 theorem Pure.eval_offset {p₁ p₂ : Pure} {l : Loc} {z : ℤ}
@@ -262,7 +278,7 @@ def Expr.substs (e : Expr) (xs : List PVar) (ts : List Term) : Expr :=
 theorem Term.Closed.subst_eq {X : Set PVar} {T : Term} (h : T.Closed X) {x : PVar}
     (t : Term) (hx : x ∉ X) : T.subst x t = T := by
   cases T <;> simp_all [Term.Closed, Term.subst]
-  grind
+  intro heq; subst heq; exact absurd h hx
 
 theorem Pure.Closed.subst_eq {X : Set PVar} {p : Pure} (h : p.Closed X) {x : PVar}
     (t : Term) (hx : x ∉ X) : p.subst x t = p := by
@@ -331,7 +347,14 @@ theorem Term.subst_ofVars (x : PVar) (t : Term) {xs : List PVar} (hx : x ∉ xs)
     (Term.ofVars xs).map (·.subst x t) = Term.ofVars xs := by
   induction xs with
   | nil => rfl
-  | cons y ys ih => simp_all [Term.subst]; grind
+  | cons y ys ih =>
+    rw [List.mem_cons, not_or] at hx
+    rw [ofVars_cons, List.map_cons, ih hx.2]
+    congr 1
+    have hne : (Term.var y) ≠ (Term.var x) := by
+      simp only [ne_eq, Term.var.injEq]
+      exact fun h => hx.1 h.symm
+    rw [Term.subst, if_neg hne]
 
 theorem Expr.substs_call {f : Fid} {xs : List PVar} {vs : List Val}
     (hlen : xs.length = vs.length) (hdup : xs.Nodup) :

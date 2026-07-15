@@ -12,10 +12,11 @@ import RUXt.Lang.Semantics
 import RUXt.Lang.TypeChecker
 import RUXt.Model.Assertion
 import RUXt.Model.Logic
--- import RUXt.Model.RISL
 import RUXt.Model.Summary
 import RUXt.Model.Witness
 import RUXt.Model.Refute
+import RUXt.Examples.RISL
+import RUXt.Examples.Even
 -- import RUXt.Types.Ty
 -- import RUXt.Types.Lib.Int
 -- import RUXt.Types.Lib.Bool

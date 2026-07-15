@@ -99,11 +99,13 @@ theorem teleMerge_apply {tt1 tt2 : Tele.{u}} {A : Type (max u a)} {B : Type (max
     (HP2 : ∀ args', P (g.apply args')) (Hmerge : ∀ a b, P b → Q (merge a b)) :
     ∀ args, Q ((teleMerge merge f g).apply args) := by
   revert f g
-  induction' tt1 with b ih
+  induction' tt1 with b ih IH
   · intro f g hg args
     convert Hmerge f (g.apply args) (hg args) using 1
     convert teleMap_apply (fun y => merge f y) g args using 1
-  · grind +locals
+  · intro f g hg args
+    obtain ⟨x, a⟩ := args
+    exact IH x (f x) g hg a
 
 /-- Project the first component of an argument tuple for an appended telescope. -/
 def TeleArg.fst : {tt1 tt2 : Tele.{u}} → TeleArg (tt1.app tt2) → TeleArg tt1
